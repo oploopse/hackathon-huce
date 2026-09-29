@@ -48,7 +48,7 @@ export default function App() {
         <p className="eyebrow">SOCRATIC EXAM / CONNECTION TEST</p>
         <h1>Kiểm tra kết nối API</h1>
         <p className="description">Bấm nút để Vercel gọi API của Hùng qua ngrok. Bạn không cần chạy backend trên máy này.</p>
-        <div className="endpoint"><span>ENDPOINT</span><code>{window.location.origin}{API_PATH}</code></div>
+        <div className="endpoint"><span>ENDPOINT VERCEL (CẦU NỐI ĐẾN API CỦA HÙNG)</span><code>{window.location.origin}{API_PATH}</code></div>
         <button type="button" onClick={checkApi} disabled={loading}>
           {loading ? 'Đang kiểm tra…' : 'Gọi API hello'}
         </button>
