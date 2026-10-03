@@ -11,12 +11,13 @@ class Settings(BaseSettings):
     )
 
     gemini_api_key: str = ""
-    brain_model: str = "gemini-3.7-flash"
+    app_access_token: str = ""
+    brain_model: str = "gemini-3.8-flash"
     fast_model: str = "gemini-3.5-flash-lite"
     live_model: str = "gemini-3.8-live"
     live_voice: str = "Kore"
-    vad_silence_ms: int = 1000
-    vad_prefix_padding_ms: int = 300
+    vad_silence_ms: int = 1500
+    vad_prefix_padding_ms: int = 100
 
     interview_minutes: int = 15
     max_concepts_per_session: int = 6

@@ -24,26 +24,10 @@ AUDIO_QUEUE_MAX = 250  # khoảng 10 giây audio với chunk 40 ms
 MAX_RECONNECTS = 3
 END_GRACE_S = 30
 TRANSIENT_CLOSE_CODES = {1000, 1001, 1006}
-LIVE_OVERLOAD_CODES = {429, 503, 1011}
-# Dùng khi LIVE_MODEL đang quá tải. Chỉ thử lúc mới kết nối, không dùng khi nối lại phiên cũ.
-_LIVE_FALLBACKS = (
-    "gemini-3.1-flash-live-preview",
-    "gemini-2.5-flash-native-audio-latest",
-)
-
-
-def live_model_chain(primary: str, active: str | None = None) -> list[str]:
-    if active:
-        return [active]
-    chain = [primary]
-    for candidate in _LIVE_FALLBACKS:
-        if candidate not in chain:
-            chain.append(candidate)
-    return chain
 
 
 def describe_live_error(exc: errors.APIError) -> str:
-    if exc.code in {429, 503, 1011}:
+    if exc.code in {429, 1011}:
         return (
             f"Gemini Live báo hết quota hoặc đang quá tải (mã {exc.code}). Free tier giới hạn theo project; "
             "hãy thử lại sau ít phút hoặc đổi LIVE_MODEL trong file .env."
@@ -70,7 +54,6 @@ class VoiceBridge:
         self.send_lock = asyncio.Lock()
 
         self.live = None
-        self.active_live_model: str | None = None
         self.pending_note: str | None = None
         self.resume_handle: str | None = None
         self.turn_counter = 0
@@ -170,7 +153,7 @@ class VoiceBridge:
             output_audio_transcription=types.AudioTranscriptionConfig(),
             realtime_input_config=types.RealtimeInputConfig(
                 automatic_activity_detection=types.AutomaticActivityDetection(
-                    start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_LOW,
+                    start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,
                     end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW,
                     prefix_padding_ms=settings.vad_prefix_padding_ms,
                     silence_duration_ms=settings.vad_silence_ms,
@@ -185,14 +168,6 @@ class VoiceBridge:
             await self._run_gemini()
         except LLMNotConfigured as exc:
             await self._send({"type": "error", "message": str(exc)})
-        except TimeoutError:
-            log.warning("Gemini Live hết giờ khi mở WebSocket cho phiên %s", self.session.id)
-            await self._send(
-                {
-                    "type": "error",
-                    "message": "Không mở được giọng nói tới Gemini vì mạng hết giờ. Hãy thử lại; nếu vẫn lỗi, kiểm tra tường lửa có chặn WebSocket không.",
-                }
-            )
         except Exception:
             log.exception("Lỗi không mong đợi trong phiên voice %s", self.session.id)
             await self._send({"type": "error", "message": "Lỗi không mong đợi ở máy chủ, xem log để biết chi tiết."})
@@ -208,50 +183,32 @@ class VoiceBridge:
         reconnects = 0
         while not self.closed.is_set():
             resume = False
-            connected = False
-            models = live_model_chain(
-                settings.live_model, self.active_live_model if self.resume_handle else None
-            )
-            for index, model in enumerate(models):
-                try:
-                    async with client.aio.live.connect(model=model, config=self._live_config()) as live:
-                        connected = True
-                        self.live = live
-                        self.active_live_model = model
-                        if model != settings.live_model:
-                            log.info("Dùng Live dự phòng %s thay cho %s", model, settings.live_model)
-                        await self._send({"type": "status", "state": "connected"})
-                        if not opening_sent:
-                            await live.send_client_content(
-                                turns=types.Content(role="user", parts=[types.Part(text=self.opening)]),
-                                turn_complete=True,
-                            )
-                            opening_sent = True
-                        if self.pending_note:
-                            await self._send_note(live, self.pending_note)
-                            self.pending_note = None
-                        pump = asyncio.create_task(self._pump_audio(live))
-                        try:
-                            resume = await self._receive_loop(live)
-                        finally:
-                            pump.cancel()
-                            self.live = None
-                    break
-                except errors.APIError as exc:
-                    overloaded = exc.code in LIVE_OVERLOAD_CODES
-                    if overloaded and not self.resume_handle and index < len(models) - 1:
-                        log.warning(
-                            "Gemini Live %s lỗi %s, chuyển sang %s", model, exc.code, models[index + 1]
+            try:
+                async with client.aio.live.connect(model=settings.live_model, config=self._live_config()) as live:
+                    self.live = live
+                    await self._send({"type": "status", "state": "connected"})
+                    if not opening_sent:
+                        await live.send_client_content(
+                            turns=types.Content(role="user", parts=[types.Part(text=self.opening)]),
+                            turn_complete=True,
                         )
-                        continue
-                    if exc.code in TRANSIENT_CLOSE_CODES and self.resume_handle and reconnects < MAX_RECONNECTS:
-                        resume = True
-                        break
+                        opening_sent = True
+                    if self.pending_note:
+                        await self._send_note(live, self.pending_note)
+                        self.pending_note = None
+                    pump = asyncio.create_task(self._pump_audio(live))
+                    try:
+                        resume = await self._receive_loop(live)
+                    finally:
+                        pump.cancel()
+                        self.live = None
+            except errors.APIError as exc:
+                if exc.code in TRANSIENT_CLOSE_CODES and self.resume_handle and reconnects < MAX_RECONNECTS:
+                    resume = True
+                else:
                     log.warning("Gemini Live lỗi %s: %s", exc.code, exc.message)
                     await self._send({"type": "error", "message": describe_live_error(exc)})
                     return
-            if not connected and not resume:
-                return
             if not resume or not self.resume_handle or reconnects >= MAX_RECONNECTS:
                 return
             reconnects += 1
@@ -341,7 +298,7 @@ class VoiceBridge:
                     evaluation = directive = None
                 if directive:
                     concept = self.doc.concept(directive.concept_id) if directive.concept_id else None
-                    note = render_voice_note(directive, concept, evaluation)
+                    note = render_voice_note(directive, concept, evaluation, self.doc)
             if interviewer_text:
                 self.engine.record_turn(self.session, "interviewer", interviewer_text)
             self.engine.store.save_session(self.session)

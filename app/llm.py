@@ -21,7 +21,6 @@ _FALLBACK_MODELS = (
     "gemini-3.7-flash",
     "gemini-3.6-flash",
     "gemini-3.5-flash-lite",
-    "gemini-3.1-flash-lite",
 )
 
 _client: genai.Client | None = None
@@ -35,29 +34,8 @@ class LLMError(RuntimeError):
     pass
 
 
-def prefer_reachable_ip() -> None:
-    """Bật Happy Eyeballs cho WebSocket Gemini Live.
-
-    Trên một số mạng, IPv6 tới Google bị đen (gói tin không đi) trong khi IPv4 vẫn thông.
-    Thư viện websockets thử địa chỉ đầu tiên và hết giờ trước khi tới IPv4.
-    """
-    import google.genai.live as live_module
-
-    if getattr(live_module, "_happy_eyeballs_patched", False):
-        return
-    original = live_module.ws_connect
-
-    def ws_connect(uri, **kwargs):
-        kwargs.setdefault("happy_eyeballs_delay", 0.25)
-        return original(uri, **kwargs)
-
-    live_module.ws_connect = ws_connect
-    live_module._happy_eyeballs_patched = True
-
-
 def get_client() -> genai.Client:
     global _client
-    prefer_reachable_ip()
     if _client is None:
         if not settings.gemini_api_key:
             raise LLMNotConfigured(

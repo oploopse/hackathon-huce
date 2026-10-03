@@ -3,8 +3,5 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .env
-.env.local
+!.env.example
 data/
-node_modules
-dist
-.vercel

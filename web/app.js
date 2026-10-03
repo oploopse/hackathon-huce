@@ -46,9 +46,23 @@ function h(tag, attrs = {}, ...children) {
   return node;
 }
 
-async function api(path, options = {}) {
-  const headers = options.body && !(options.body instanceof FormData) ? { "Content-Type": "application/json" } : {};
+async function api(path, options = {}, retryAuth = true) {
+  const headers = {
+    ...(options.body && !(options.body instanceof FormData) ? { "Content-Type": "application/json" } : {}),
+    ...(options.headers || {}),
+  };
   const response = await fetch(path, { ...options, headers });
+  if (response.status === 401 && retryAuth && path !== "/api/auth/login") {
+    const token = window.prompt("Nhập APP_ACCESS_TOKEN để đăng nhập:");
+    if (token) {
+      const login = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      if (login.ok) return api(path, options, false);
+    }
+  }
   let data = null;
   try {
     data = await response.json();
@@ -479,7 +493,7 @@ class VoiceClient {
   }
 
   get label() {
-    if (this.error) return this.error;
+    if (this.error) return "Có lỗi kết nối";
     if (this.ended) return "Buổi phỏng vấn đã kết thúc";
     if (this.stopped) return "Đã dừng";
     if (this.connection === "reconnecting") return "Đang nối lại…";

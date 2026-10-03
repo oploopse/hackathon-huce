@@ -2,9 +2,7 @@ import asyncio
 
 from google.genai import errors
 
-import google.genai.live as live_module
-
-from app.llm import _generate, prefer_reachable_ip
+from app.llm import _generate
 
 
 class _Response:
@@ -48,22 +46,6 @@ def test_generate_falls_back_when_model_is_overloaded(monkeypatch):
 
     assert text == '{"ok": true}'
     assert models.calls == ["gemini-3.8-flash", "gemini-3.7-flash"]
-
-
-def test_live_websocket_tries_ipv4_in_parallel(monkeypatch):
-    captured = {}
-
-    def fake_connect(uri, **kwargs):
-        captured["uri"] = uri
-        captured.update(kwargs)
-        return "session"
-
-    monkeypatch.setattr(live_module, "ws_connect", fake_connect)
-    monkeypatch.setattr(live_module, "_happy_eyeballs_patched", False, raising=False)
-
-    prefer_reachable_ip()
-    assert live_module.ws_connect("wss://generativelanguage.googleapis.com/ws") == "session"
-    assert captured["happy_eyeballs_delay"] == 0.25
 
 
 def _config():
