@@ -14,17 +14,22 @@ from google.genai import errors, types
 from .config import settings
 from .interview.engine import InterviewEngine
 from .llm import LLMError, LLMNotConfigured, get_client
-from .prompts import render_voice_note
+from .prompts import LANGUAGE_NOTE, document_terms, looks_foreign, render_voice_note
 from .schemas import DocumentRecord, SessionRecord
 
 log = logging.getLogger(__name__)
 
 INPUT_MIME = "audio/pcm;rate=16000"
-AUDIO_QUEUE_MAX = 250  # khoảng 10 giây audio với chunk 40 ms
-MAX_RECONNECTS = 3
-END_GRACE_S = 30
-TRANSIENT_CLOSE_CODES = {1000, 1001, 1006}
+AUDIO_QUEUE_MAX = 50  # khoảng 2 giây audio với chunk 40 ms; audio cũ hơn chỉ làm AI trả lời trễ
+MAX_RECONNECTS = 5
+RECONNECT_DELAYS_S = (0.3, 1.0, 2.0, 3.0, 5.0)
+END_GRACE_S = 20
+STABLE_CONNECTION_S = 60  # kết nối chạy ổn lâu hơn mức này thì đếm lại số lần nối lại
+TRANSIENT_CLOSE_CODES = {1000, 1001, 1006, 1011, 1012, 1013, 1014}
 LIVE_OVERLOAD_CODES = {429, 503, 1011}
+# Model từ chối một tuỳ chọn cấu hình: bỏ dần tuỳ chọn (thinking trước, rồi gợi ý ngôn ngữ) rồi thử lại.
+LIVE_CONFIG_REJECTED_CODES = {400, 1007}
+CONFIG_FULL, CONFIG_NO_THINKING, CONFIG_MINIMAL = 0, 1, 2
 # Dùng khi LIVE_MODEL đang quá tải. Chỉ thử lúc mới kết nối, không dùng khi nối lại phiên cũ.
 _LIVE_FALLBACKS = (
     "gemini-3.1-flash-live-preview",
@@ -63,6 +68,10 @@ class VoiceBridge:
         self.session = session
         self.doc = doc
         self.system_instruction, self.opening = engine.voice_prompts(session, doc)
+        self.terms = document_terms(doc)
+        self.config_level = CONFIG_FULL
+        self.opening_sent = False
+        self.background: set[asyncio.Task] = set()
 
         self.audio_in: asyncio.Queue[bytes] = asyncio.Queue(maxsize=AUDIO_QUEUE_MAX)
         self.turns: asyncio.Queue[tuple[int, str, str]] = asyncio.Queue()
@@ -157,20 +166,45 @@ class VoiceBridge:
 
     # -- Gemini -> trình duyệt -------------------------------------------------
 
+    def _input_transcription(self) -> types.AudioTranscriptionConfig:
+        if self.config_level >= CONFIG_MINIMAL:
+            return types.AudioTranscriptionConfig()
+        # Ngôn ngữ chính đứng đầu để bản chép không trôi sang tiếng Anh khi người học chêm thuật ngữ;
+        # từ vựng lấy từ tài liệu giúp nghe đúng thuật ngữ chuyên ngành.
+        languages = [settings.speech_language, *settings.term_languages.split(",")]
+        return types.AudioTranscriptionConfig(
+            language_codes=[code.strip() for code in dict.fromkeys(languages) if code.strip()],
+            custom_vocabulary=self.terms or None,
+        )
+
     def _live_config(self) -> types.LiveConnectConfig:
+        start_sensitivity = (
+            types.StartSensitivity.START_SENSITIVITY_LOW
+            if settings.vad_start_sensitivity.lower() == "low"
+            else types.StartSensitivity.START_SENSITIVITY_HIGH
+        )
+        thinking = (
+            types.ThinkingConfig(thinking_budget=settings.live_thinking_budget)
+            if settings.live_thinking_budget >= 0 and self.config_level == CONFIG_FULL
+            else None
+        )
+        # Ngôn ngữ nói của AI cố định là tiếng Việt, để giọng không trôi theo thuật ngữ tiếng Anh của người học.
+        speech_language = settings.speech_language if self.config_level < CONFIG_MINIMAL else None
         return types.LiveConnectConfig(
             response_modalities=[types.Modality.AUDIO],
             system_instruction=self.system_instruction,
+            thinking_config=thinking,
             speech_config=types.SpeechConfig(
+                language_code=speech_language,
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=settings.live_voice)
                 )
             ),
-            input_audio_transcription=types.AudioTranscriptionConfig(),
+            input_audio_transcription=self._input_transcription(),
             output_audio_transcription=types.AudioTranscriptionConfig(),
             realtime_input_config=types.RealtimeInputConfig(
                 automatic_activity_detection=types.AutomaticActivityDetection(
-                    start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,
+                    start_of_speech_sensitivity=start_sensitivity,
                     end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW,
                     prefix_padding_ms=settings.vad_prefix_padding_ms,
                     silence_duration_ms=settings.vad_silence_ms,
@@ -202,61 +236,94 @@ class VoiceBridge:
             turns=types.Content(role="user", parts=[types.Part(text=note)]), turn_complete=False
         )
 
+    async def _connect_once(self, client, model: str, resuming: bool) -> bool:
+        """Mở một kết nối Live và chuyển tiếp tới khi kết nối đóng. Trả về True khi cần nối lại."""
+        opening = self.opening
+        if not resuming and self.opening_sent:
+            # Nối lại mà Gemini không nhớ ngữ cảnh: dựng lại chỉ dẫn theo chủ đề hiện tại,
+            # xin lỗi và hỏi lại câu đang dang dở.
+            async with self.engine.lock(self.session.id):
+                self.system_instruction, opening = self.engine.voice_prompts(self.session, self.doc)
+        async with client.aio.live.connect(model=model, config=self._live_config()) as live:
+            self.live = live
+            self.active_live_model = model
+            if model != settings.live_model:
+                log.info("Dùng Live dự phòng %s thay cho %s", model, settings.live_model)
+            await self._send({"type": "status", "state": "connected"})
+            if not resuming:
+                await live.send_client_content(
+                    turns=types.Content(role="user", parts=[types.Part(text=opening)]), turn_complete=True
+                )
+                self.opening_sent = True
+            if self.pending_note:
+                await self._send_note(live, self.pending_note)
+                self.pending_note = None
+            pump = asyncio.create_task(self._pump_audio(live))
+            try:
+                return await self._receive_loop(live)
+            finally:
+                pump.cancel()
+                self.live = None
+
     async def _run_gemini(self) -> None:
         client = get_client()
-        opening_sent = False
+        loop = asyncio.get_running_loop()
         reconnects = 0
         while not self.closed.is_set():
-            resume = False
-            connected = False
-            models = live_model_chain(
-                settings.live_model, self.active_live_model if self.resume_handle else None
-            )
-            for index, model in enumerate(models):
+            # Có handle thì nối lại đúng phiên cũ (Gemini nhớ hội thoại); không có thì mở phiên mới.
+            resuming = bool(self.resume_handle)
+            models = live_model_chain(settings.live_model, self.active_live_model if resuming else None)
+            index = 0
+            retry = False
+            started = loop.time()
+            while index < len(models):
+                model = models[index]
                 try:
-                    async with client.aio.live.connect(model=model, config=self._live_config()) as live:
-                        connected = True
-                        self.live = live
-                        self.active_live_model = model
-                        if model != settings.live_model:
-                            log.info("Dùng Live dự phòng %s thay cho %s", model, settings.live_model)
-                        await self._send({"type": "status", "state": "connected"})
-                        if not opening_sent:
-                            await live.send_client_content(
-                                turns=types.Content(role="user", parts=[types.Part(text=self.opening)]),
-                                turn_complete=True,
-                            )
-                            opening_sent = True
-                        if self.pending_note:
-                            await self._send_note(live, self.pending_note)
-                            self.pending_note = None
-                        pump = asyncio.create_task(self._pump_audio(live))
-                        try:
-                            resume = await self._receive_loop(live)
-                        finally:
-                            pump.cancel()
-                            self.live = None
+                    retry = await self._connect_once(client, model, resuming)
                     break
                 except errors.APIError as exc:
-                    overloaded = exc.code in LIVE_OVERLOAD_CODES
-                    if overloaded and not self.resume_handle and index < len(models) - 1:
+                    if self.closed.is_set():
+                        return
+                    first_connect = not self.opening_sent
+                    if exc.code in LIVE_CONFIG_REJECTED_CODES and first_connect and self.config_level < CONFIG_MINIMAL:
+                        self.config_level += 1
                         log.warning(
-                            "Gemini Live %s lỗi %s, chuyển sang %s", model, exc.code, models[index + 1]
+                            "Gemini Live %s từ chối cấu hình (%s: %s), thử lại với cấu hình mức %d",
+                            model, exc.code, exc.message, self.config_level,
                         )
                         continue
-                    if exc.code in TRANSIENT_CLOSE_CODES and self.resume_handle and reconnects < MAX_RECONNECTS:
-                        resume = True
+                    if exc.code in LIVE_OVERLOAD_CODES and first_connect and index < len(models) - 1:
+                        log.warning("Gemini Live %s lỗi %s, chuyển sang %s", model, exc.code, models[index + 1])
+                        index += 1
+                        continue
+                    if not first_connect and reconnects < MAX_RECONNECTS:
+                        log.info("Gemini Live đóng kết nối (%s: %s), sẽ nối lại", exc.code, exc.message)
+                        if exc.code not in TRANSIENT_CLOSE_CODES:
+                            # Handle cũ có thể là nguyên nhân lỗi; mở phiên mới cho chắc.
+                            self.resume_handle = None
+                        retry = True
                         break
                     log.warning("Gemini Live lỗi %s: %s", exc.code, exc.message)
                     await self._send({"type": "error", "message": describe_live_error(exc)})
                     return
-            if not connected and not resume:
+                except (TimeoutError, OSError) as exc:
+                    # Mạng chập chờn khi mở WebSocket tới Gemini: thử lại vài lần rồi mới báo lỗi.
+                    if self.closed.is_set() or reconnects >= MAX_RECONNECTS:
+                        raise
+                    log.warning("Không mở được Gemini Live (%r), thử lại", exc)
+                    retry = True
+                    break
+            if not retry or self.closed.is_set():
                 return
-            if not resume or not self.resume_handle or reconnects >= MAX_RECONNECTS:
+            if loop.time() - started > STABLE_CONNECTION_S:
+                reconnects = 0
+            if reconnects >= MAX_RECONNECTS:
+                await self._send({"type": "error", "message": "Mất kết nối tới Gemini Live nhiều lần. Hãy thử lại sau."})
                 return
+            await self._send({"type": "status", "state": "reconnecting"})
+            await asyncio.sleep(RECONNECT_DELAYS_S[min(reconnects, len(RECONNECT_DELAYS_S) - 1)])
             reconnects += 1
             self._drop_stale_audio()
-            await self._send({"type": "status", "state": "reconnecting"})
             log.info("Nối lại Gemini Live cho phiên %s (lần %d)", self.session.id, reconnects)
 
     def _drop_stale_audio(self) -> None:
@@ -309,6 +376,17 @@ class VoiceBridge:
             return
         self.turn_counter += 1
         self.turns.put_nowait((self.turn_counter, learner_text, interviewer_text))
+        if self.live is not None and (looks_foreign(learner_text) or looks_foreign(interviewer_text)):
+            # Gửi ngay, không chờ bộ não chấm xong, để lượt nói kế tiếp của AI quay về tiếng Việt.
+            task = asyncio.get_running_loop().create_task(self._send_language_note(self.live))
+            self.background.add(task)
+            task.add_done_callback(self.background.discard)
+
+    async def _send_language_note(self, live) -> None:
+        try:
+            await self._send_note(live, LANGUAGE_NOTE)
+        except Exception as exc:
+            log.info("Không gửi được nhắc ngôn ngữ cho phiên %s: %s", self.session.id, exc)
 
     # -- Bộ não chạy ngầm ------------------------------------------------------
 

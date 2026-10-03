@@ -4,6 +4,7 @@
 import * as api from "./api.js";
 import { $, ICONS, formatClock, h, img, notice, setContent } from "./dom.js";
 import { BAR_COUNT, MicCheck, TEST_PHRASE } from "./mic-check.js";
+import { sessionOptions, setPageCount } from "./setup-display.js";
 
 const SAMPLE = { url: "/samples/Mang_may_tinh_Chuong3.pdf", name: "Mang_may_tinh_Chuong3.pdf" };
 const SUPPORTED = /\.(pdf|docx|txt|md)$/i;
@@ -11,7 +12,6 @@ const IMPORTANCE = { 3: "Cốt lõi", 2: "Quan trọng", 1: "Bổ trợ" };
 const LEVEL_ON = 0.15;
 const MODE_NOTES = {
   voice: "Trò chuyện real-time với giám khảo AI bằng giọng nói qua Gemini Live. Bạn có thể ngắt lời, AI dừng ngay.",
-  dictate: "Giám khảo đọc câu hỏi, bạn nói câu trả lời rồi bấm Trả lời để xem lại và sửa chữ máy nghe nhầm, bấm Trả lời lần nữa để nộp. Cần Chrome hoặc Edge.",
   text: "Trả lời bằng cách gõ phím. Cùng bộ não chấm điểm, tiện để thử mà không tốn quota giọng nói.",
 };
 const MIC_PROBLEMS = {
@@ -197,6 +197,9 @@ function firstProblem() {
   if (!selectedDoc()) {
     return { section: els.docField, focus: els.fileInput, message: "Cần tải hoặc chọn một tài liệu trước khi bắt đầu." };
   }
+  if (!sessionOptions().valid) {
+    return { section: $("#field-range"), focus: $("#page-from"), message: "Phạm vi trang chưa hợp lệ." };
+  }
   return null;
 }
 
@@ -224,6 +227,7 @@ async function submit(event) {
       learnerName: els.learnerName.value.trim() || "bạn",
       mode: state.mode,
       bargeIn: els.bargeIn.checked,
+      sessionOptions: sessionOptions().values,
     });
   } finally {
     state.starting = false;
@@ -274,6 +278,7 @@ function renderDocList() {
 
 function renderConcepts() {
   const doc = selectedDoc();
+  setPageCount(doc ? doc.page_count : null);
   els.conceptsField.hidden = !doc;
   if (!doc) return;
   els.conceptCount.textContent = `${doc.concepts.length} chủ đề`;

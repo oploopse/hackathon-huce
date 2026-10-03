@@ -67,19 +67,14 @@ function show(view) {
 
 /** Phải được gọi trong thao tác bấm nút để trình duyệt cho phát âm thanh của giọng nói. */
 async function startInterview(options) {
-  const { doc, learnerName, mode, bargeIn } = options;
+  const { doc, learnerName, mode, bargeIn, sessionOptions } = options;
   const voice = mode === "voice" ? interview.createVoice() : null;
-  // "Nói rồi sửa" dùng phiên nhắn tin; giọng nói chạy trên trình duyệt (web/js/speech.js).
-  const dictate = mode === "dictate";
-  if (dictate) interview.primeSpeech();
   try {
-    const result = await api.startSession({ documentId: doc.id, learnerName, mode: dictate ? "text" : mode });
+    const result = await api.startSession({ documentId: doc.id, learnerName, mode, ...sessionOptions });
     flow.document = doc;
     flow.options = options;
     show("interview");
-    // Ô viết đáp án trong chế độ giọng nói chỉ gửi được khi máy chủ báo hỗ trợ (web/API_CONTRACT.md).
-    const textInput = Boolean(flow.health && flow.health.voice_text_input);
-    await interview.start({ session: result.session, message: result.message, voice, bargeIn, textInput, dictate });
+    await interview.start({ session: result.session, message: result.message, voice, bargeIn });
   } catch (error) {
     if (voice) voice.stop();
     interview.dispose();

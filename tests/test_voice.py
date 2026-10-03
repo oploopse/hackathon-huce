@@ -154,7 +154,8 @@ def test_voice_source_context_follows_current_concept():
 
     opening = voice_system_instruction(doc, "Lan", first)
     assert "mutual exclusion" in opening
-    assert "deadlock" not in opening
+    # Danh sách thuật ngữ lấy từ cả tài liệu, nhưng trích đoạn nguồn chỉ thuộc chủ đề đang hỏi.
+    assert "là trạng thái các tiến trình chờ nhau" not in opening
     note = render_voice_note(
         Directive(action="next_concept", concept_id="c2", question="Bế tắc là gì?"),
         second, make_eval(), doc,
@@ -181,3 +182,38 @@ def test_voice_source_context_is_bounded_and_handles_missing_references():
     context = voice_concept_context(doc, concept)
     assert concept.name in context
     assert "Trích đoạn tài liệu gốc" not in context
+
+
+def test_voice_bridge_drops_rejected_config_options(client, document, monkeypatch):
+    from google.genai import errors
+
+    live = FakeLiveSession([model_turn(None, "Chào Lan."), model_turn("Dạ", "Cảm ơn Lan, buổi trò chuyện kết thúc.")])
+    configs = []
+
+    def connect(model, config):
+        configs.append(config)
+        if len(configs) == 1:
+            raise errors.APIError(1007, {"error": {"message": "thinking not supported"}})
+        return FakeConnection(live)
+
+    fake_client = SimpleNamespace(aio=SimpleNamespace(live=SimpleNamespace(connect=connect)))
+    monkeypatch.setattr(voice_module, "get_client", lambda: fake_client)
+    monkeypatch.setattr(voice_module.settings, "live_thinking_budget", 0)
+
+    session = client.post(
+        "/api/sessions", json={"document_id": document["id"], "learner_name": "Lan", "mode": "voice"}
+    ).json()["session"]
+    with client.websocket_connect(f"/api/sessions/{session['id']}/voice") as ws:
+        while True:
+            event = json.loads(ws.receive()["text"])
+            assert event["type"] != "error", event
+            if event["type"] == "status":
+                break
+        ws.send_text(json.dumps({"type": "end"}))
+
+    assert configs[0].thinking_config is not None
+    assert configs[0].input_audio_transcription.language_codes == ["vi-VN", "en-US"]
+    # Lần hai bỏ thinking nhưng vẫn giữ gợi ý ngôn ngữ cho nhận dạng giọng nói.
+    assert configs[1].thinking_config is None
+    assert configs[1].input_audio_transcription.language_codes == ["vi-VN", "en-US"]
+    assert configs[1].speech_config.language_code == "vi-VN"

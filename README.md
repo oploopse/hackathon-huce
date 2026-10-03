@@ -27,7 +27,7 @@ Mở `.env`, điền `GEMINI_API_KEY` (lấy miễn phí tại [Google AI Studio
 
 Lệnh này đọc `.env`, tắt server cũ của chính dự án nếu cổng 8000 đang bị bản đó chiếm, rồi mở http://127.0.0.1:8000. Trình duyệt chỉ cho dùng micro trên `localhost` hoặc HTTPS. Nếu model đang chọn báo quá tải (`503`), ứng dụng tự chuyển sang model dự phòng.
 
-Giao diện mới nằm ở `/` (`web/index.html`, mã trong `web/js/`) và chạy cùng luồng với giao diện cũ: tải tài liệu, chọn Giọng nói (Gemini Live real-time) hoặc Nhắn tin, Bảng giáo viên, báo cáo cho người học và giáo viên. Giao diện cũ vẫn mở được ở `/legacy.html`.
+Giao diện mới nằm ở `/` (`web/index.html`, mã trong `web/js/`) và chạy cùng luồng với giao diện cũ: tải tài liệu, chọn phạm vi trang, số câu, thời lượng, chọn Giọng nói (Gemini Live real-time) hoặc Nhắn tin, Bảng giáo viên, báo cáo cho người học và giáo viên. Giao diện cũ vẫn mở được ở `/legacy.html`.
 
 Chạy test (không cần API key, dùng LLM và phiên Gemini Live giả):
 
@@ -85,12 +85,26 @@ Ngưỡng và trọng số nằm ở đầu `app/interview/director.py`.
 | `FAST_MODEL` | `gemini-3.5-flash-lite` | Lời người phỏng vấn ở chế độ nhắn tin |
 | `LIVE_MODEL` | `gemini-3.8-live` | Hội thoại giọng nói |
 | `LIVE_VOICE` | `Kore` | Giọng đọc của AI |
-| `VAD_SILENCE_MS` | `1500` | Im lặng bao lâu thì AI được nói; chờ lâu hơn để người học ngập ngừng |
+| `VAD_SILENCE_MS` | `1000` | Im lặng bao lâu thì AI được nói; giảm để AI đáp nhanh hơn, tăng nếu AI hay cướp lời khi người học ngập ngừng |
 | `VAD_PREFIX_PADDING_MS` | `100` | Thời gian xác nhận bắt đầu nói; giảm để nhận câu trả lời ngắn |
+| `VAD_START_SENSITIVITY` | `high` | `low` khi phòng ồn để tạp âm không làm AI dừng nói |
+| `LIVE_THINKING_BUDGET` | `0` | Token suy nghĩ của Gemini Live trước mỗi lượt nói; `0` đáp nhanh nhất, `-1` để model tự quyết |
+| `SPEECH_LANGUAGE` | `vi-VN` | Ngôn ngữ chính khi nhận dạng giọng nói và khi AI nói |
+| `TERM_LANGUAGES` | `en-US` | Ngôn ngữ của thuật ngữ người học hay chêm vào (nhiều mã cách nhau bằng dấu phẩy) |
+| `LLM_TIMEOUT_S` | `30` | Một lần gọi Gemini quá thời gian này thì chuyển sang model dự phòng |
+| `KNOWLEDGE_TIMEOUT_S` | `240` | Như trên, riêng cho bước soạn bản đồ kiến thức khi tải tài liệu |
 | `INTERVIEW_MINUTES` | `15` | Thời lượng tối đa một buổi |
 | `MAX_CONCEPTS_PER_SESSION` | `6` | Số chủ đề tối đa mỗi buổi |
 | `MAX_ANSWERS_PER_CONCEPT` | `4` | Số câu trả lời tối đa cho một chủ đề |
 | `MAX_HINTS_PER_CONCEPT` | `1` | Số lần gợi ý tối đa cho một chủ đề |
+
+Model báo quá tải (429/503) hoặc quá giờ sẽ bị bỏ qua 60 giây để các lượt sau đi thẳng tới model dự phòng.
+
+Nhận dạng giọng nói trong phòng ồn và khi chêm thuật ngữ tiếng Anh:
+
+- Trình duyệt lọc nhiễu (`noiseSuppression`, `echoCancellation`), sau đó `web/capture-worklet.js` lọc thông cao ~120 Hz và dùng cổng nhiễu tự học mức ồn nền trước khi gửi audio.
+- Gemini Live được gợi ý ngôn ngữ (`SPEECH_LANGUAGE` + `TERM_LANGUAGES`) và danh sách thuật ngữ lấy từ tài liệu, nên nghe đúng các từ như TCP, checksum, multiplexing mà bản chép vẫn giữ tiếng Việt.
+- Nếu người học hoặc AI nói phần lớn bằng tiếng nước ngoài, máy chủ gửi ngay chỉ thị ẩn nhắc AI quay lại tiếng Việt.
 
 Khi `APP_ACCESS_TOKEN` được cấu hình, API và WebSocket yêu cầu đăng nhập bằng token này.
 Giao diện sẽ hỏi token lần đầu và lưu token trong cookie HttpOnly của phiên trình duyệt.

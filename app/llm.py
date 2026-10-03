@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from typing import TypeVar
 
 from google import genai
@@ -23,6 +24,11 @@ _FALLBACK_MODELS = (
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
 )
+
+# Model vừa quá tải hoặc quá chậm bị bỏ qua trong một khoảng ngắn, để các lượt sau đi thẳng tới model dự phòng
+# thay vì lần nào cũng chờ vài giây mới nhận lỗi 503.
+COOLDOWN_S = 60.0
+_cooldown_until: dict[str, float] = {}
 
 _client: genai.Client | None = None
 
@@ -70,7 +76,11 @@ def get_client() -> genai.Client:
 def _build_config(
     system: str, thinking_level: str | None, schema: type[BaseModel] | None
 ) -> types.GenerateContentConfig:
-    kwargs: dict = {"system_instruction": system}
+    # Không dùng gọi hàm tự động (AFC); tắt để SDK không làm thêm bước thừa cho mỗi lượt.
+    kwargs: dict = {
+        "system_instruction": system,
+        "automatic_function_calling": types.AutomaticFunctionCallingConfig(disable=True),
+    }
     if thinking_level:
         kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=thinking_level)
     if schema is not None:
@@ -84,19 +94,39 @@ def _model_chain(model: str) -> list[str]:
     for candidate in _FALLBACK_MODELS:
         if candidate not in chain:
             chain.append(candidate)
-    return chain
+    now = time.monotonic()
+    ready = [m for m in chain if _cooldown_until.get(m, 0) <= now]
+    cooling = [m for m in chain if m not in ready]
+    # Model đang nghỉ vẫn được thử sau cùng, phòng khi mọi model khác cũng lỗi.
+    return ready + cooling
 
 
-async def _generate(model: str, prompt: str, config: types.GenerateContentConfig) -> str:
+def _cool_down(model: str) -> None:
+    _cooldown_until[model] = time.monotonic() + COOLDOWN_S
+
+
+async def _generate(
+    model: str, prompt: str, config: types.GenerateContentConfig, timeout_s: float | None = None
+) -> str:
     last_error: LLMError | None = None
     chain = _model_chain(model)
+    timeout_s = timeout_s or settings.llm_timeout_s
     for index, current in enumerate(chain):
-        delay = 2.0
+        delay = 1.0
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             try:
-                response = await get_client().aio.models.generate_content(
-                    model=current, contents=prompt, config=config
+                response = await asyncio.wait_for(
+                    get_client().aio.models.generate_content(model=current, contents=prompt, config=config),
+                    timeout=timeout_s,
                 )
+            except asyncio.TimeoutError as exc:
+                # Model đang chậm bất thường: chuyển ngay sang model dự phòng thay vì để người dùng chờ tiếp.
+                last_error = LLMError(f"Gemini {current} không phản hồi sau {timeout_s:.0f} giây")
+                _cool_down(current)
+                if index < len(chain) - 1:
+                    log.warning("%s, chuyển sang %s", last_error, chain[index + 1])
+                    break
+                raise last_error from exc
             except errors.APIError as exc:
                 # Một số model (ví dụ dòng 2.x) không nhận thinking_level; thử lại không kèm cấu hình thinking.
                 if exc.code == 400 and config.thinking_config and "think" in str(exc.message).lower():
@@ -104,6 +134,8 @@ async def _generate(model: str, prompt: str, config: types.GenerateContentConfig
                     continue
                 last_error = LLMError(f"Gemini API lỗi {exc.code}: {exc.message}")
                 overloaded = exc.code in _IMMEDIATE_FAILOVER
+                if overloaded:
+                    _cool_down(current)
                 if exc.code in _RETRYABLE_CODES and not overloaded and attempt < _MAX_ATTEMPTS:
                     log.warning("Gemini %s trả lỗi %s, thử lại sau %.0fs", current, exc.code, delay)
                     await asyncio.sleep(delay)
@@ -128,9 +160,14 @@ async def _generate(model: str, prompt: str, config: types.GenerateContentConfig
 
 
 async def generate_json(
-    model: str, system: str, prompt: str, schema: type[T], thinking_level: str | None = "low"
+    model: str,
+    system: str,
+    prompt: str,
+    schema: type[T],
+    thinking_level: str | None = "low",
+    timeout_s: float | None = None,
 ) -> T:
-    text = await _generate(model, prompt, _build_config(system, thinking_level, schema))
+    text = await _generate(model, prompt, _build_config(system, thinking_level, schema), timeout_s)
     try:
         return schema.model_validate_json(text)
     except ValidationError as exc:

@@ -16,8 +16,19 @@ class Settings(BaseSettings):
     fast_model: str = "gemini-3.5-flash-lite"
     live_model: str = "gemini-3.8-live"
     live_voice: str = "Kore"
-    vad_silence_ms: int = 1500
+    vad_silence_ms: int = 1000
     vad_prefix_padding_ms: int = 100
+    # "high" bắt câu ngắn nhạy hơn; "low" bớt bị tạp âm làm AI dừng nói (nên dùng khi phòng ồn).
+    vad_start_sensitivity: str = "high"
+    # Số token suy nghĩ của Gemini Live trước mỗi lượt nói: 0 để AI đáp nhanh nhất, -1 để model tự quyết.
+    live_thinking_budget: int = 0
+    # Ngôn ngữ chính khi nhận dạng giọng nói, kèm ngôn ngữ phụ của thuật ngữ chuyên ngành.
+    speech_language: str = "vi-VN"
+    term_languages: str = "en-US"
+
+    # Giới hạn thời gian mỗi lần gọi Gemini (giây); quá giờ thì chuyển sang model dự phòng.
+    llm_timeout_s: float = 30
+    knowledge_timeout_s: float = 240
 
     interview_minutes: int = 15
     max_concepts_per_session: int = 6

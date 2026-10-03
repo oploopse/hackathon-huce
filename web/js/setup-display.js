@@ -1,5 +1,5 @@
 // Màn 01 · Các ô Phạm vi trang, Số câu hỏi, Thời gian phỏng vấn (theo thiết kế gốc).
-// Chỉ phần hiển thị: giá trị chưa gửi lên backend vì API hiện chưa nhận các trường này.
+// Giá trị được gửi kèm POST /api/sessions qua sessionOptions().
 
 import { $, formatDuration, h } from "./dom.js";
 
@@ -34,6 +34,7 @@ const els = {
 
 const state = {
   hasDoc: false,
+  pageCount: null,
   pageFrom: "",
   pageTo: "",
   questionCount: LIMITS.questionCount.default,
@@ -56,10 +57,12 @@ function rangeErrors() {
   const to = state.pageTo ? parsePage(state.pageTo) : null;
   if (from === null) errors.from = "Nhập số trang.";
   else if (from < 1) errors.from = "Trang đầu tiên là 1.";
+  else if (state.pageCount && from > state.pageCount) errors.from = `File chỉ có ${state.pageCount} trang.`;
   if (!state.pageTo) return errors;
 
   if (to === null) errors.to = "Nhập số trang.";
   else if (to < 1) errors.to = "Trang đầu tiên là 1.";
+  else if (state.pageCount && to > state.pageCount) errors.to = `File chỉ có ${state.pageCount} trang.`;
   else if (!errors.from && to < from) errors.to = `Phải từ trang ${from} trở đi.`;
   else if (!errors.from && to - from + 1 > LIMITS.maxPages) {
     errors.to = `Tối đa ${LIMITS.maxPages} trang mỗi lần, tức đến trang ${from + LIMITS.maxPages - 1}.`;
@@ -97,10 +100,15 @@ function renderRange() {
   if (valid && !whole) label = to ? (from === to ? `tr. ${from}` : `tr. ${from}–${to}`) : `tr. ${from} đến hết`;
   els.coverageRange.textContent = label;
 
-  // Chưa biết tổng số trang nên chỉ tô kín thanh khi chọn cả tài liệu.
-  els.coverageFill.hidden = !(valid && whole);
-  els.coverageFill.style.setProperty("--start", "0%");
-  els.coverageFill.style.setProperty("--size", "100%");
+  const total = state.pageCount;
+  if (valid && total) {
+    els.coverageTotal.textContent = whole ? `Toàn bộ tài liệu · ${numberVi.format(total)} trang` : `Một phần của ${numberVi.format(total)} trang`;
+  }
+  // Biết tổng số trang thì tô đúng đoạn đã chọn; chưa biết thì chỉ tô kín khi chọn cả tài liệu.
+  const end = to || total;
+  els.coverageFill.hidden = !(valid && (whole || (total && end)));
+  els.coverageFill.style.setProperty("--start", whole || !total ? "0%" : `${((from - 1) / total) * 100}%`);
+  els.coverageFill.style.setProperty("--size", whole || !total ? "100%" : `${((end - from + 1) / total) * 100}%`);
 }
 
 function renderQuestions() {
@@ -190,6 +198,30 @@ function init() {
   new MutationObserver(syncDocument).observe(els.conceptsField, { attributes: true, attributeFilter: ["hidden"] });
   syncDocument();
   render();
+}
+
+/** Tổng số trang của tài liệu đang chọn (null nếu tài liệu không có số trang, ví dụ TXT). */
+export function setPageCount(count) {
+  const value = Number(count) || null;
+  if (value === state.pageCount) return;
+  state.pageCount = value;
+  render();
+}
+
+/** Tuỳ chọn gửi kèm POST /api/sessions; valid = false khi phạm vi trang đang nhập sai. */
+export function sessionOptions() {
+  const errors = rangeErrors();
+  const from = state.pageFrom ? Number(state.pageFrom) : null;
+  const to = state.pageTo ? Number(state.pageTo) : null;
+  return {
+    valid: !errors.from && !errors.to,
+    values: {
+      pageFrom: from && from > 1 ? from : to ? 1 : null,
+      pageTo: to,
+      questionCount: state.questionCount,
+      durationMinutes: state.durationMinutes,
+    },
+  };
 }
 
 init();

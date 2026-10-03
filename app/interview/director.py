@@ -32,6 +32,8 @@ class Limits:
     max_concepts: int
     max_answers_per_concept: int
     max_hints_per_concept: int
+    # Tổng số câu trả lời cần có trong buổi, tính cả câu hỏi đào sâu; None là không giới hạn.
+    question_limit: int | None = None
 
     @classmethod
     def from_settings(cls) -> "Limits":
@@ -41,6 +43,43 @@ class Limits:
             max_answers_per_concept=settings.max_answers_per_concept,
             max_hints_per_concept=settings.max_hints_per_concept,
         )
+
+    @classmethod
+    def for_session(cls, session: SessionRecord) -> "Limits":
+        return cls(
+            interview_minutes=time_limit_minutes(session),
+            max_concepts=settings.max_concepts_per_session,
+            max_answers_per_concept=settings.max_answers_per_concept,
+            max_hints_per_concept=settings.max_hints_per_concept,
+            question_limit=session.question_limit,
+        )
+
+
+def time_limit_minutes(session: SessionRecord) -> int:
+    return session.time_limit_minutes or settings.interview_minutes
+
+
+def concept_pages(doc: DocumentRecord, concept: Concept) -> set[int]:
+    chunks = doc.chunks_by_id()
+    return {chunks[c].page for c in concept.source_chunks if c in chunks and chunks[c].page}
+
+
+def concepts_in_pages(doc: DocumentRecord, page_from: int | None, page_to: int | None) -> list[Concept]:
+    """Các concept có nội dung nằm trong phạm vi trang. Tài liệu không có số trang thì giữ nguyên."""
+    concepts = doc.knowledge_map.concepts
+    if page_from is None and page_to is None:
+        return list(concepts)
+    low, high = page_from or 1, page_to or 10**9
+    kept = []
+    for concept in concepts:
+        pages = concept_pages(doc, concept)
+        if not pages or any(low <= page <= high for page in pages):
+            kept.append(concept)
+    return kept
+
+
+def answered_count(session: SessionRecord) -> int:
+    return sum(1 for r in session.evaluations if r.evaluation.intent not in NO_EVIDENCE_INTENTS)
 
 
 def plan_concept_order(knowledge_map: KnowledgeMap, limit: int) -> list[str]:
@@ -161,6 +200,12 @@ def decide(
 
     if time_is_up(session, limits, now):
         return _advance(session, doc, limits, "Hết thời gian phỏng vấn", force_wrap_up=True)
+    if (
+        limits.question_limit
+        and evaluation.intent not in NO_EVIDENCE_INTENTS
+        and answered_count(session) + 1 >= limits.question_limit
+    ):
+        return _advance(session, doc, limits, "Đã hỏi đủ số câu đã chọn", force_wrap_up=True)
 
     question = current_question(session)
     if evaluation.intent == "clarification_request":

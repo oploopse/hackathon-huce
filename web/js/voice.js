@@ -30,7 +30,8 @@ export class VoiceClient {
       this.playCtx.audioWorklet.addModule("/playback-worklet.js"),
     ]);
     this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
+      // Lọc nhiễu của trình duyệt chạy trước; capture-worklet.js lọc thêm tiếng ù và tạp âm nền.
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1, voiceIsolation: true },
     });
     await Promise.all([this.captureCtx.resume(), this.playCtx.resume()]);
 
@@ -75,13 +76,6 @@ export class VoiceClient {
     this.muted = muted;
     this.syncMic();
     this.handlers.onState();
-  }
-
-  /** Gửi câu trả lời dạng chữ (gõ tay hoặc sửa lại lời vừa nói). Cần backend hỗ trợ, xem web/API_CONTRACT.md. */
-  sendText(text) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || this.connection !== "connected") return false;
-    this.ws.send(JSON.stringify({ type: "text", text }));
-    return true;
   }
 
   setPlaying(playing) {

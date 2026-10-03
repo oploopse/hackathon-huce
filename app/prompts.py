@@ -1,8 +1,61 @@
+import re
+from collections import Counter
+
 from .schemas import Concept, ConceptProgress, Directive, DocumentRecord, EvaluationRecord, Turn, TurnEvaluation
 
 BLOOM_LABELS = {1: "nhớ", 2: "hiểu", 3: "vận dụng", 4: "phân tích", 5: "đánh giá", 6: "sáng tạo"}
 
 VOICE_SOURCE_CHARS = 3600
+MAX_TERMS = 60
+
+_ACRONYM = re.compile(r"\b[A-Z][A-Za-z0-9]*[A-Z0-9][A-Za-z0-9]*\b")  # TCP, IPv4, RTT, MSS
+_PAREN_LATIN = re.compile(r"\(([A-Za-z][A-Za-z0-9 /.+-]{2,40})\)")  # (multiplexing), (Go-Back-N)
+_LATIN_WORD = re.compile(r"\b[A-Za-z][A-Za-z0-9-]{2,}\b")
+_WORD = re.compile(r"[^\W\d_]+")
+_VI_MARKS = re.compile(r"[^\x00-\x7f]")
+
+
+def _foreign_word(word: str) -> bool:
+    """Từ Latin không dấu mà âm tiết tiếng Việt không có: chứa f/j/w/z, dài từ 8 chữ, hoặc có gạch nối."""
+    lower = word.lower()
+    return any(ch in lower for ch in "fjwz") or len(word) >= 8 or "-" in word
+
+
+def document_terms(doc: DocumentRecord, limit: int = MAX_TERMS) -> list[str]:
+    """Thuật ngữ (thường là tiếng Anh) trong tài liệu, để nhận dạng giọng nói nghe đúng khi người học nói chêm."""
+    counts: Counter[str] = Counter()
+    texts = [doc.knowledge_map.title]
+    for concept in doc.knowledge_map.concepts:
+        texts += [concept.name, concept.summary, *(kp.text for kp in concept.key_points)]
+    texts += [chunk.text for chunk in doc.chunks]
+    for text in texts:
+        for match in _PAREN_LATIN.findall(text):
+            counts[match.strip()] += 3
+        for match in _ACRONYM.findall(text):
+            if len(match) <= 12:
+                counts[match] += 2
+        for match in _LATIN_WORD.findall(text):
+            if _foreign_word(match):
+                counts[match] += 1
+    terms = [term for term, _ in counts.most_common() if len(term) >= 2]
+    names = [c.name for c in doc.knowledge_map.concepts]
+    return list(dict.fromkeys([*names, *terms]))[:limit]
+
+
+def looks_foreign(text: str) -> bool:
+    """Lời nói phần lớn không phải tiếng Việt (chữ tiếng Việt từ nhận dạng giọng nói luôn có dấu)."""
+    words = _WORD.findall(text)
+    if len(words) < 4:
+        return False
+    accented = sum(1 for w in words if _VI_MARKS.search(w))
+    return accented / len(words) < 0.2
+
+
+LANGUAGE_NOTE = (
+    "[CHỈ THỊ ẨN] Người học vừa nói nhiều từ tiếng nước ngoài (thường là thuật ngữ chuyên ngành). "
+    "Ngôn ngữ của buổi phỏng vấn vẫn là tiếng Việt: ở các lượt tiếp theo hãy nói hoàn toàn bằng tiếng Việt, "
+    "chỉ giữ nguyên thuật ngữ chuyên ngành, và hiểu lời người học như câu trả lời tiếng Việt có chêm thuật ngữ."
+)
 
 ACTION_LABELS = {
     "ask_main": "Hỏi câu hỏi chính của chủ đề",
@@ -98,6 +151,7 @@ EVALUATOR_SYSTEM = """Bạn là giám khảo đánh giá mức độ hiểu bài
 
 Nguyên tắc:
 - Chấm theo ý nghĩa, không theo câu chữ. Câu trả lời có thể được nhận dạng từ giọng nói nên có lỗi chính tả, sai dấu, nhầm từ đồng âm; không trừ điểm vì những lỗi đó.
+- Người học thường nói tiếng Việt chêm thuật ngữ tiếng Anh. Bộ nhận dạng giọng nói có thể phiên âm sai thuật ngữ (ví dụ "ti xi pi" là TCP, "u đê pê" là UDP) hoặc chép cả đoạn sang tiếng Anh; hãy hiểu theo thuật ngữ gần nhất trong tài liệu khi ngữ cảnh rõ ràng và không trừ điểm vì ngôn ngữ.
 - Một thuật ngữ đơn lẻ hoặc câu bắt đầu bằng thuật ngữ có thể là câu trả lời cho câu hỏi hiện tại, không mặc định là hỏi định nghĩa, lạc đề hay xã giao. Đánh giá độ đủ ý theo yêu cầu câu hỏi, không theo độ dài: nêu tên có thể đủ cho câu hỏi nhận diện nhưng chưa đủ cho câu hỏi giải thích.
 - Chỉ ghi nhận ý người học thực sự nói; không bổ sung định nghĩa, lập luận hay ý chính từ tài liệu vào câu trả lời của họ.
 - Dựa trên các ý chính và trích đoạn tài liệu được cung cấp. Kiến thức đúng nằm ngoài tài liệu vẫn được ghi nhận nếu không mâu thuẫn với tài liệu.
@@ -179,6 +233,8 @@ Cách nói chuyện:
 
 Vì đây là cuộc trò chuyện bằng giọng nói:
 - RESPOND IN VIETNAMESE. YOU MUST RESPOND UNMISTAKABLY IN VIETNAMESE.
+- Người học là người Việt và hay chêm thuật ngữ tiếng Anh (ví dụ TCP, UDP, checksum, multiplexing). Đó vẫn là câu trả lời tiếng Việt: tuyệt đối không chuyển sang nói tiếng Anh, kể cả khi cả câu của người học nghe như tiếng Anh. Giữ nguyên thuật ngữ, phần còn lại luôn nói tiếng Việt.
+- Phòng có thể ồn. Nếu chỉ nghe thấy tạp âm, tiếng người khác ở xa hoặc vài âm không rõ nghĩa, coi như người học chưa trả lời: im lặng chờ, hoặc nếu đã im khá lâu thì hỏi nhẹ "Bạn nói lại giúp mình được không?". Không trả lời theo tạp âm.
 - Nếu bị ngắt lời, dừng lại và lắng nghe, rồi phản hồi theo điều người học vừa nói.
 - Trong lượt trả lời, diễn giải lời người học theo câu hỏi gần nhất của bạn. Một thuật ngữ đơn lẻ, từ viết tắt hoặc câu bắt đầu bằng thuật ngữ vẫn có thể là câu trả lời; không mặc định đó là yêu cầu bạn định nghĩa hay giải thích thuật ngữ.
 - Đối chiếu thuật ngữ với chủ đề và trích đoạn tài liệu gốc được cung cấp. Chỉ dùng ngữ cảnh để hỗ trợ nghe hiểu, không tự bổ sung phần người học chưa nói. Nếu không nghe rõ thuật ngữ, yêu cầu nhắc lại bằng câu trung tính, không đọc ra đáp án để xác nhận.
@@ -194,8 +250,16 @@ Chỉ thị ẩn:
 
 
 def voice_system_instruction(doc: DocumentRecord, learner_name: str, concept: Concept) -> str:
+    terms = document_terms(doc, limit=40)
+    glossary = (
+        "\n\nThuật ngữ có thể nghe thấy trong buổi (chỉ để nhận ra từ người học nói, không đọc ra): "
+        + ", ".join(terms)
+        if terms
+        else ""
+    )
     return (
         interviewer_persona(doc.knowledge_map.title, learner_name, voice=True)
+        + glossary
         + "\n\nChủ đề hiện tại (bí mật, chỉ để bạn định hướng):\n"
         + voice_concept_context(doc, concept)
     )

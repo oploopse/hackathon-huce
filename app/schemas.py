@@ -216,6 +216,11 @@ class SessionRecord(BaseModel):
     created_at: datetime = Field(default_factory=utcnow)
     finished_at: datetime | None = None
     concept_order: list[str]
+    # Tuỳ chọn ở màn Thiết lập; None nghĩa là dùng mặc định trong .env (phiên tạo trước khi có các trường này).
+    time_limit_minutes: int | None = None
+    question_limit: int | None = None
+    page_from: int | None = None
+    page_to: int | None = None
     current_concept_id: str | None = None
     pending_concept_id: str | None = None
     wrap_up_requested: bool = False

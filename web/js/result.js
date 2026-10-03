@@ -1,7 +1,7 @@
 // Màn 05 · Đang chấm điểm và 06 · Kết quả.
 
 import * as api from "./api.js";
-import { ICONS, formatDuration, h, img, maskIcon, notice, pillButton, truncate } from "./dom.js";
+import { ICONS, formatDuration, h, img, maskIcon, notice, pillButton, toast, truncate } from "./dom.js";
 
 const LEVEL = {
   strong: { label: "Vững", chip: "is-success", headline: "Nắm vững phần này" },
@@ -11,6 +11,17 @@ const LEVEL = {
   not_assessed: { label: "Chưa đánh giá", chip: "", headline: "Chưa đủ câu trả lời để đánh giá" },
 };
 const SVG_NS = "http://www.w3.org/2000/svg";
+
+/** Ký hiệu đỉnh radar theo thứ tự chủ đề: A, B, C… rồi AA, AB… nếu nhiều hơn 26 chủ đề. */
+export function axisLetter(index) {
+  let n = index;
+  let label = "";
+  do {
+    label = String.fromCharCode(65 + (n % 26)) + label;
+    n = Math.floor(n / 26) - 1;
+  } while (n >= 0);
+  return label;
+}
 
 function tick() {
   return h("span", { class: "tick" }, img(ICONS.checkWhite12, 12));
@@ -147,18 +158,23 @@ function radar(concepts, previous) {
     const weak = c.score < 50;
     const [px, py] = point(i, c.score / 100);
     svg.append(svgEl("circle", { cx: px, cy: py, r: 4, fill: weak ? "var(--danger)" : "var(--primary)" }));
-    const [lx, ly] = point(i, 1.18);
+    // Đỉnh chỉ ghi ký hiệu và điểm; tên chủ đề nằm ở các ô chú thích bên dưới cùng ký hiệu.
+    const [lx, ly] = point(i, 1.16);
     const anchor = Math.abs(lx - cx) < 8 ? "middle" : lx > cx ? "start" : "end";
     const label = svgEl("text", {
       x: lx,
-      y: ly + 4,
+      y: ly + 5,
       "text-anchor": anchor,
-      "font-size": 12,
-      "font-weight": 600,
+      "font-size": 14,
+      "font-weight": 700,
       fill: weak ? "var(--danger)" : "var(--ink)",
       "font-family": "var(--font-sans)",
     });
-    label.textContent = `${truncate(c.name, 22)} · ${c.score}`;
+    const letter = svgEl("tspan", { fill: weak ? "var(--danger)" : "var(--primary)" });
+    letter.textContent = axisLetter(i);
+    const score = svgEl("tspan", { dx: 6, "font-weight": 600 });
+    score.textContent = String(c.score);
+    label.append(letter, score);
     svg.append(label);
   });
   return svg;
@@ -212,8 +228,7 @@ export function renderResult(root, { report, insights, sessionInfo, doc, summary
   const assessed = report.concepts.filter((c) => c.level !== "not_assessed");
   const misconceptions = assessed.some((c) => c.misconceptions.length);
   const learnerName = sessionInfo?.learner_name || summary.session.learner_name;
-  const modeLabel = summary.dictate ? "Phỏng vấn nói rồi sửa"
-    : summary.session.mode === "voice" ? "Phỏng vấn giọng nói" : "Phỏng vấn nhắn tin";
+  const modeLabel = summary.session.mode === "voice" ? "Phỏng vấn giọng nói" : "Phỏng vấn nhắn tin";
   const diff = previous && report.overall_level !== "not_assessed" ? report.overall_score - previous.score : null;
   const finishedAt = new Date(report.generated_at).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
 
@@ -234,11 +249,14 @@ export function renderResult(root, { report, insights, sessionInfo, doc, summary
           h("span", { class: "chip" }, img(ICONS.headphones14, 14), `${learnerName} · ${modeLabel}`)))),
     criticalGap(report));
 
-  const tiles = h("div", { class: "axis-tiles" }, assessed.map((c) => {
+  // Ký hiệu chỉ khớp với đỉnh radar khi radar được vẽ (từ 3 chủ đề trở lên).
+  const lettered = assessed.length >= 3;
+  const tiles = h("div", { class: "axis-tiles" }, assessed.map((c, i) => {
     const prev = previous?.concepts[c.concept_id];
     const change = prev === undefined ? null : c.score - prev;
     return h("div", { class: `axis-tile${c.score < 50 ? " is-weak" : ""}` },
-      h("p", {}, c.name),
+      lettered ? h("span", { class: "axis-letter", "aria-hidden": "true" }, axisLetter(i)) : null,
+      h("p", {}, lettered ? h("span", { class: "visually-hidden" }, `${axisLetter(i)}: `) : null, c.name),
       h("strong", {}, c.score),
       change !== null ? h("span", { class: `chip chip-white chip-small`, style: `color: var(${change >= 0 ? "--success" : "--danger"})` },
         `${change >= 0 ? "+" : ""}${change}`) : null);
@@ -259,7 +277,6 @@ export function renderResult(root, { report, insights, sessionInfo, doc, summary
 
   root.replaceChildren(
     h("div", { class: "result-top" },
-      h("span", { class: "chip is-success" }, img(ICONS.check, 14), `Đã hoàn thành · ${doc.title} (${doc.filename})`),
       h("span", {}, attempt > 1 ? `Lần thi thứ ${attempt} · xong lúc ${finishedAt}` : `Xong lúc ${finishedAt}`)),
     overview,
     learnerPanel,
@@ -267,5 +284,6 @@ export function renderResult(root, { report, insights, sessionInfo, doc, summary
       h("button", { type: "button", class: "btn-primary btn-big", onclick: onRetry }, img(ICONS.target, 18), h("span", {}, "Thi lại")),
       pillButton("Đổi tài liệu hoặc phạm vi", { icon: ICONS.sliders, iconSize: 18, className: "btn-pill btn-outline-big", onclick: onChangeSetup })),
   );
+  toast(`Đã hoàn thành · ${doc.title} (${doc.filename})`, "success", 3000);
 }
 

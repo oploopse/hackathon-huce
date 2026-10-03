@@ -81,7 +81,7 @@ async function request(path, options = {}, retryAuth = true) {
   }
 }
 
-/** { llm_configured, models: { brain, fast, live }, interview_minutes } */
+/** { llm_configured, models: { brain, fast, live }, interview_minutes, session_options } */
 export function health() {
   return request("/api/health", { timeoutMs: 10_000 });
 }
@@ -101,17 +101,34 @@ export function uploadDocument(file) {
   return request("/api/documents", { method: "POST", form, timeoutMs: 300_000 });
 }
 
-/** Trả về { session, message }; message là câu mở đầu ở chế độ nhắn tin, null ở chế độ giọng nói. */
-export function startSession({ documentId, learnerName, mode }) {
+/**
+ * Trả về { session, message }; message là câu mở đầu ở chế độ nhắn tin, null ở chế độ giọng nói.
+ * pageFrom/pageTo (bỏ trống là cả tài liệu), questionCount (5–10), durationMinutes (5–15) là tuỳ chọn.
+ */
+export function startSession({ documentId, learnerName, mode, pageFrom, pageTo, questionCount, durationMinutes }) {
   return request("/api/sessions", {
     method: "POST",
-    json: { document_id: documentId, learner_name: learnerName || "bạn", mode },
+    // Ở chế độ nhắn tin máy chủ soạn luôn câu hỏi đầu nên cần chờ lâu hơn một lượt gọi Gemini.
+    timeoutMs: mode === "text" ? 90_000 : 30_000,
+    json: {
+      document_id: documentId,
+      learner_name: learnerName || "bạn",
+      mode,
+      page_from: pageFrom ?? null,
+      page_to: pageTo ?? null,
+      question_count: questionCount ?? null,
+      duration_minutes: durationMinutes ?? null,
+    },
   });
 }
 
-/** Trả về { message, finished }. */
+/** Trả về { message, finished }. Máy chủ chấm rồi soạn câu tiếp theo, mỗi bước tự chuyển model khi quá chậm. */
 export function sendAnswer(sessionId, text) {
-  return request(`/api/sessions/${sessionId}/messages`, { method: "POST", json: { text: text.slice(0, 4000) } });
+  return request(`/api/sessions/${sessionId}/messages`, {
+    method: "POST",
+    json: { text: text.slice(0, 4000) },
+    timeoutMs: 90_000,
+  });
 }
 
 /** Điểm từng lượt và quyết định của giám khảo (hỏi sâu hay chuyển chủ đề). */

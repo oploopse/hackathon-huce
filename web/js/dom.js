@@ -104,17 +104,28 @@ export function truncate(text, max) {
 }
 
 let toastTimer = 0;
+let toastHideTimer = 0;
+const TOAST_LEAVE_MS = 200;
 
-/** Thông báo ngắn ở cuối màn hình; kind = "error" hoặc "warn". */
-export function toast(message, kind = "error") {
+/**
+ * Thông báo nổi ở cuối màn hình, tự ẩn sau durationMs.
+ * kind = "error" (mặc định), "warn" hoặc "success" (kèm dấu tích).
+ */
+export function toast(message, kind = "error", durationMs = 6000) {
   const node = $("#toast");
-  node.textContent = message;
-  node.className = `toast${kind === "warn" ? " is-warn" : ""}`;
-  node.hidden = false;
   clearTimeout(toastTimer);
+  clearTimeout(toastHideTimer);
+  node.replaceChildren(...(kind === "success" ? [img(ICONS.checkWhite16, 16), h("span", {}, message)] : [message]));
+  node.className = `toast${kind === "warn" ? " is-warn" : kind === "success" ? " is-success" : ""}`;
+  node.setAttribute("role", kind === "error" ? "alert" : "status");
+  node.hidden = false;
   toastTimer = setTimeout(() => {
-    node.hidden = true;
-  }, 6000);
+    node.classList.add("is-leaving");
+    toastHideTimer = setTimeout(() => {
+      node.hidden = true;
+      node.classList.remove("is-leaving");
+    }, reducedMotion() ? 0 : TOAST_LEAVE_MS);
+  }, durationMs);
 }
 
 export function reducedMotion() {

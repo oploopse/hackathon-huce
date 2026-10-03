@@ -31,6 +31,10 @@ class SessionFinished(RuntimeError):
     pass
 
 
+class NoConceptsInRange(ValueError):
+    pass
+
+
 class InterviewEngine:
     def __init__(self, store: JsonStore):
         self.store = store
@@ -48,8 +52,16 @@ class InterviewEngine:
 
     # -- Tạo phiên -------------------------------------------------------------
 
-    def create_session(self, doc: DocumentRecord, learner_name: str, mode: str) -> SessionRecord:
-        order = director.plan_concept_order(doc.knowledge_map, settings.max_concepts_per_session)
+    def create_session(
+        self, doc: DocumentRecord, learner_name: str, mode: str, options: dict | None = None
+    ) -> SessionRecord:
+        """options: time_limit_minutes, question_limit, page_from, page_to (đều không bắt buộc)."""
+        options = {k: v for k, v in (options or {}).items() if v is not None}
+        concepts = director.concepts_in_pages(doc, options.get("page_from"), options.get("page_to"))
+        if not concepts:
+            raise NoConceptsInRange("Không có chủ đề nào nằm trong phạm vi trang đã chọn. Hãy mở rộng phạm vi trang.")
+        knowledge_map = doc.knowledge_map.model_copy(update={"concepts": concepts})
+        order = director.plan_concept_order(knowledge_map, settings.max_concepts_per_session)
         session = SessionRecord(
             id=new_id(),
             document_id=doc.id,
@@ -57,28 +69,33 @@ class InterviewEngine:
             mode=mode,
             concept_order=order,
             progress={cid: ConceptProgress(concept_id=cid) for cid in order},
+            **options,
         )
         director.switch_concept(session, order[0])
         session.progress[order[0]].asked_questions.append(director.first_question(doc.concept(order[0])))
         session.last_action = "ask_main"
         return session
 
-    async def start_text_session(self, doc: DocumentRecord, learner_name: str) -> tuple[SessionRecord, str]:
-        session = self.create_session(doc, learner_name, "text")
+    async def start_text_session(
+        self, doc: DocumentRecord, learner_name: str, options: dict | None = None
+    ) -> tuple[SessionRecord, str]:
+        session = self.create_session(doc, learner_name, "text", options)
         concept = doc.concept(session.current_concept_id)
         directive = Directive(
             action="ask_main",
             concept_id=concept.id,
             question=director.first_question(concept),
-            note=opening_note(learner_name, doc.knowledge_map.title, settings.interview_minutes),
+            note=opening_note(learner_name, doc.knowledge_map.title, director.time_limit_minutes(session)),
         )
         reply = await generate_utterance(session, doc, directive)
         self.record_turn(session, "interviewer", reply)
         self.store.save_session(session)
         return session, reply
 
-    def start_voice_session(self, doc: DocumentRecord, learner_name: str) -> SessionRecord:
-        session = self.create_session(doc, learner_name, "voice")
+    def start_voice_session(
+        self, doc: DocumentRecord, learner_name: str, options: dict | None = None
+    ) -> SessionRecord:
+        session = self.create_session(doc, learner_name, "voice", options)
         self.store.save_session(session)
         return session
 
@@ -93,7 +110,7 @@ class InterviewEngine:
             )
         else:
             opening = voice_opening_instruction(
-                session.learner_name, doc.knowledge_map.title, settings.interview_minutes,
+                session.learner_name, doc.knowledge_map.title, director.time_limit_minutes(session),
                 director.first_question(concept),
             )
         return system, opening
@@ -135,7 +152,7 @@ class InterviewEngine:
                 director.switch_concept(session, session.pending_concept_id)
                 session.pending_concept_id = None
         elif not session.wrap_up_requested:
-            directive = director.decide(session, doc, evaluation, director.Limits.from_settings())
+            directive = director.decide(session, doc, evaluation, director.Limits.for_session(session))
             director.apply_directive(session, directive, defer_switch=defer_switch)
 
         session.evaluations.append(
@@ -237,7 +254,7 @@ class InterviewEngine:
             "status": session.status,
             "mode": session.mode,
             "elapsed_seconds": int((utcnow() - session.created_at).total_seconds()),
-            "time_limit_seconds": settings.interview_minutes * 60,
+            "time_limit_seconds": director.time_limit_minutes(session) * 60,
             "current_concept_id": session.current_concept_id,
             "concepts": concepts,
             "evaluations": evaluations,

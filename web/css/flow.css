@@ -443,11 +443,25 @@
 .legend i { width: 24px; height: 3px; border-radius: 2px; background: var(--primary); }
 .legend i.is-dashed { height: 0; border-top: 2px dashed var(--faint); background: none; }
 .legend .is-current { color: var(--ink); font-weight: 600; }
-.radar { width: 100%; height: auto; overflow: visible; }
+.radar { display: block; width: 100%; max-width: 460px; height: auto; margin: 0 auto; overflow: visible; }
 .axis-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .axis-tile { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-radius: 14px; background: var(--subtle); }
 .axis-tile p { flex: 1; min-width: 0; color: var(--body); font-size: 13px; font-weight: 500; }
 .axis-tile strong { font-size: 20px; font-weight: 700; line-height: 1.2; }
+.axis-letter {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+.axis-tile.is-weak .axis-letter { background: var(--danger); }
 .axis-tile.is-weak { background: var(--danger-bg); }
 .axis-tile.is-weak p, .axis-tile.is-weak strong { color: var(--danger); }
 .plan { display: flex; flex-direction: column; gap: 8px; margin: 0; padding-left: 20px; color: var(--body); font-size: 14px; }
@@ -553,6 +567,22 @@
   transform: translateX(-50%);
 }
 .toast.is-warn { background: var(--warn); }
+.toast.is-success {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  top: 84px;
+  bottom: auto;
+  background: var(--success);
+  font-weight: 600;
+}
+.toast:not([hidden]) { animation: toast-in 0.2s ease-out; }
+.toast.is-leaving { animation: toast-out 0.2s ease-in forwards; }
+@keyframes toast-in { from { transform: translate(-50%, 8px); } to { transform: translate(-50%, 0); } }
+@keyframes toast-out { from { opacity: 1; transform: translate(-50%, 0); } to { opacity: 0; transform: translate(-50%, 8px); } }
+@media (prefers-reduced-motion: reduce) {
+  .toast:not([hidden]), .toast.is-leaving { animation: none; }
+}
 
 /* Kết quả: hai góc nhìn người học và giáo viên */
 

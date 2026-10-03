@@ -43,10 +43,34 @@ def test_generate_falls_back_when_model_is_overloaded(monkeypatch):
         }
     )
     monkeypatch.setattr("app.llm.get_client", lambda: _Client(models))
+    monkeypatch.setattr("app.llm._cooldown_until", {})
 
     text = asyncio.run(_generate("gemini-3.8-flash", "prompt", config=_config()))
 
     assert text == '{"ok": true}'
+    assert models.calls == ["gemini-3.8-flash", "gemini-3.7-flash"]
+
+    # Model vừa quá tải được bỏ qua ở lượt sau, không phải chờ thêm một lỗi 503 nữa.
+    models.calls.clear()
+    asyncio.run(_generate("gemini-3.8-flash", "prompt", config=_config()))
+    assert models.calls == ["gemini-3.7-flash"]
+
+
+def test_generate_moves_on_when_model_is_too_slow(monkeypatch):
+    class SlowModels(_Models):
+        async def generate_content(self, model, contents, config):
+            self.calls.append(model)
+            if model == "gemini-3.8-flash":
+                await asyncio.sleep(5)
+            return _Response("ok")
+
+    models = SlowModels({})
+    monkeypatch.setattr("app.llm.get_client", lambda: _Client(models))
+    monkeypatch.setattr("app.llm._cooldown_until", {})
+
+    text = asyncio.run(_generate("gemini-3.8-flash", "prompt", config=_config(), timeout_s=0.05))
+
+    assert text == "ok"
     assert models.calls == ["gemini-3.8-flash", "gemini-3.7-flash"]
 
 

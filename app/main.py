@@ -7,11 +7,12 @@ from typing import Literal
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .config import settings
 from .ingest import SUPPORTED_EXTENSIONS, UnsupportedFile, chunk_blocks, parse_document
-from .interview.engine import InterviewEngine, SessionFinished, SessionNotFound
+from .interview import director
+from .interview.engine import InterviewEngine, NoConceptsInRange, SessionFinished, SessionNotFound
 from .knowledge import build_knowledge_map
 from .llm import LLMError, LLMNotConfigured
 from .schemas import DocumentRecord, Report, SessionRecord
@@ -51,10 +52,36 @@ async def _llm_error(_: Request, exc: LLMError) -> JSONResponse:
     return JSONResponse(status_code=502, content={"detail": str(exc)})
 
 
+MAX_PAGE_SPAN = 100
+
+
 class SessionCreate(BaseModel):
     document_id: str
     learner_name: str = Field(default="bạn", max_length=60)
     mode: Literal["text", "voice"] = "voice"
+    # Các tuỳ chọn của màn Thiết lập (web/API_CONTRACT.md mục 2); bỏ trống thì dùng mặc định.
+    page_from: int | None = Field(default=None, ge=1)
+    page_to: int | None = Field(default=None, ge=1)
+    question_count: int | None = Field(default=None, ge=5, le=10)
+    duration_minutes: int | None = Field(default=None, ge=5, le=15)
+
+    @model_validator(mode="after")
+    def _check_pages(self) -> "SessionCreate":
+        if self.page_to is not None:
+            start = self.page_from or 1
+            if self.page_to < start:
+                raise ValueError("Trang kết thúc phải lớn hơn hoặc bằng trang bắt đầu")
+            if self.page_to - start + 1 > MAX_PAGE_SPAN:
+                raise ValueError(f"Tối đa {MAX_PAGE_SPAN} trang mỗi lần")
+        return self
+
+    def options(self) -> dict:
+        return {
+            "time_limit_minutes": self.duration_minutes,
+            "question_limit": self.question_count,
+            "page_from": self.page_from,
+            "page_to": self.page_to,
+        }
 
 
 class AnswerIn(BaseModel):
@@ -118,6 +145,7 @@ def document_summary(doc: DocumentRecord) -> dict:
         "summary": km.summary,
         "truncated": doc.truncated,
         "chunk_count": len(doc.chunks),
+        "page_count": max((c.page for c in doc.chunks if c.page), default=None),
         "concepts": [
             {"id": c.id, "name": c.name, "summary": c.summary, "importance": c.importance, "question_count": len(c.questions)}
             for c in km.concepts
@@ -135,7 +163,10 @@ def session_public(session: SessionRecord, doc: DocumentRecord) -> dict:
         "mode": session.mode,
         "status": session.status,
         "created_at": session.created_at.isoformat(),
-        "time_limit_seconds": settings.interview_minutes * 60,
+        "time_limit_seconds": director.time_limit_minutes(session) * 60,
+        "question_limit": session.question_limit,
+        "page_from": session.page_from,
+        "page_to": session.page_to,
         "turns": [{"role": t.role, "text": t.text, "at": t.at.isoformat()} for t in session.turns],
         "has_report": session.report is not None,
     }
@@ -148,6 +179,7 @@ def health() -> dict:
         "llm_configured": bool(settings.gemini_api_key),
         "models": {"brain": settings.brain_model, "fast": settings.fast_model, "live": settings.live_model},
         "interview_minutes": settings.interview_minutes,
+        "session_options": True,
     }
 
 
@@ -204,10 +236,16 @@ def get_document(doc_id: str, _: None = Depends(_access_dependency)) -> dict:
 async def create_session(body: SessionCreate, _: None = Depends(_access_dependency)) -> dict:
     doc = _document_or_404(body.document_id)
     learner_name = body.learner_name.strip() or "bạn"
-    if body.mode == "text":
-        session, message = await engine.start_text_session(doc, learner_name)
-        return {"session": session_public(session, doc), "message": message}
-    session = engine.start_voice_session(doc, learner_name)
+    page_count = max((c.page for c in doc.chunks if c.page), default=None)
+    if page_count and body.page_from and body.page_from > page_count:
+        raise HTTPException(422, f"File chỉ có {page_count} trang")
+    try:
+        if body.mode == "text":
+            session, message = await engine.start_text_session(doc, learner_name, body.options())
+            return {"session": session_public(session, doc), "message": message}
+        session = engine.start_voice_session(doc, learner_name, body.options())
+    except NoConceptsInRange as exc:
+        raise HTTPException(422, str(exc)) from exc
     return {"session": session_public(session, doc), "message": None}
 
 

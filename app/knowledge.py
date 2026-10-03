@@ -29,7 +29,8 @@ async def build_knowledge_map(filename: str, chunks: list[Chunk]) -> tuple[Knowl
         document=format_document(selected),
     )
     raw = await generate_json(
-        settings.brain_model, KNOWLEDGE_MAP_SYSTEM, prompt, KnowledgeMap, thinking_level="medium"
+        settings.brain_model, KNOWLEDGE_MAP_SYSTEM, prompt, KnowledgeMap,
+        thinking_level="medium", timeout_s=settings.knowledge_timeout_s,
     )
     return normalize_knowledge_map(raw, {c.id for c in chunks}), truncated
 

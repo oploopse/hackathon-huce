@@ -12,7 +12,7 @@ from app.storage import JsonStore
 from .factories import make_concept, make_eval
 
 
-async def fake_generate_json(model, system, prompt, schema, thinking_level=None):
+async def fake_generate_json(model, system, prompt, schema, thinking_level=None, timeout_s=None):
     if schema is KnowledgeMap:
         return KnowledgeMap(title="Mạng máy tính", summary="Tóm tắt", concepts=[make_concept("A"), make_concept("B")])
     if schema is TurnEvaluation:
