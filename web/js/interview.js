@@ -1,16 +1,29 @@
-// Màn 04 · Phỏng vấn: giám khảo đọc câu hỏi (04a), nghe câu trả lời (04b), suy nghĩ (04c).
-// Câu hỏi và chấm điểm do backend lo; đọc và nghe chạy trên trình duyệt (speech.js).
+// Màn 02 · Phỏng vấn, cùng luồng với giao diện cũ (web/app.js): giọng nói real-time qua Gemini Live
+// hoặc nhắn tin, phụ đề hội thoại, và Bảng giáo viên xem đánh giá ngầm trong lúc phỏng vấn.
 
 import * as api from "./api.js";
-import { ICONS, formatClock, h, img, maskIcon, notice, pillButton, truncate } from "./dom.js";
-import { LEVEL_BARS, Listener, Speaker } from "./speech.js";
+import { ICONS, formatClock, h, img, maskIcon, notice, pillButton, toast, truncate } from "./dom.js";
+import { VoiceClient } from "./voice.js";
 
-const NOT_HEARD_MS = 8000;
-const WARN_S = 15;
-const DONE_DELAY_MS = 2000;
-// Các quyết định của giám khảo vẫn ở lại khái niệm cũ, tính là câu hỏi đào sâu.
+const STATUS = {
+  pending: "Chưa hỏi", in_progress: "Đang hỏi", mastered: "Hiểu tốt",
+  partial: "Hiểu một phần", gap: "Chưa nắm", unassessed: "Chưa đủ dữ liệu",
+};
+const STATUS_CHIP = { in_progress: "chip-solid", mastered: "is-success", partial: "is-warn", gap: "chip-danger" };
+const ACTIONS = {
+  ask_main: "Hỏi câu chính", probe_deeper: "Hỏi sâu", challenge: "Phản biện", hint: "Gợi ý",
+  clarify: "Diễn đạt lại", encourage: "Động viên", redirect: "Kéo về câu hỏi",
+  next_concept: "Chuyển chủ đề", wrap_up: "Kết thúc",
+};
 const FOLLOW_UP = new Set(["probe_deeper", "challenge", "hint", "clarify", "encourage", "redirect"]);
+const BLOOM = ["—", "Nhớ", "Hiểu", "Vận dụng", "Phân tích", "Đánh giá", "Sáng tạo"];
+const SPEAKING_LEVEL = 0.04;
+const FULL_SCALE_LEVEL = 0.12;
+const LEVEL_BARS = 28;
+const LEVEL_SAMPLE_MS = 70;
+const INSIGHTS_MS = 3000;
 
+/** Quyết định của giám khảo vẫn ở lại chủ đề cũ, tức câu hỏi tiếp theo là câu đào sâu. */
 export function isFollowUp(action) {
   return FOLLOW_UP.has(action);
 }
@@ -21,19 +34,12 @@ export class Interview {
     this.strip = strip;
     this.dialog = dialog;
     this.onFinish = onFinish;
-    this.speaker = new Speaker();
-    this.listener = new Listener({
-      onText: () => this.onText(),
-      onLevels: (levels) => this.renderWave(levels),
-      onError: (reason) => this.onListenError(reason),
-    });
     this.timer = 0;
-    window.addEventListener("online", () => this.active && this.render());
-    window.addEventListener("offline", () => this.active && this.render());
+    this.insightsTimer = 0;
     dialog.querySelector("#confirm-end-cancel").addEventListener("click", () => dialog.close());
     dialog.querySelector("#confirm-end-ok").addEventListener("click", () => {
       dialog.close();
-      this.finish("early");
+      this.finish();
     });
   }
 
@@ -41,524 +47,366 @@ export class Interview {
     return Boolean(this.session) && !this.ended;
   }
 
-  async start({ setup, document, session, message }) {
+  /** Tạo VoiceClient ngay trong thao tác bấm nút, để trình duyệt cho phép phát âm thanh. */
+  createVoice() {
+    const voice = new VoiceClient({
+      onState: () => this.renderVoiceState(),
+      onLevel: (level) => this.renderLevel(level),
+      onTranscript: (role, text) => this.appendTranscript(role, text),
+      onTurnEnd: (interrupted) => this.endTranscriptTurn(interrupted),
+      onWarning: (message) => toast(message, "warn"),
+      onError: (message) => toast(message),
+      onEnded: () => {
+        this.markFinished();
+        this.finish();
+      },
+      onDisconnected: (error) => {
+        this.renderVoiceState();
+        this.markFinished();
+        if (!error) toast("Mất kết nối giọng nói. Bạn có thể xem kết quả với phần đã trả lời.", "warn");
+      },
+    });
+    voice.prepareAudio();
+    return voice;
+  }
+
+  async start({ session, message, voice, bargeIn }) {
+    clearInterval(this.timer);
+    clearInterval(this.insightsTimer);
     Object.assign(this, {
-      setup,
-      document,
       session,
-      limitMs: setup.durationMinutes * 60_000,
-      usedMs: 0,
-      lastTick: performance.now(),
-      questions: [{ text: message, kind: "new", follows: null, answer: "", answerSeconds: 0 }],
-      answered: 0,
-      phase: "reading",
-      inputMode: Listener.supported ? "voice" : "typing",
-      muted: false,
+      voice,
+      mode: session.mode,
+      startedAt: Date.now(),
+      finished: false,
       ended: false,
-      timeUp: false,
-      error: null,
-      draft: "",
-      historyOpen: true,
-      listenError: null,
-      doneReason: null,
+      sending: false,
+      bubbles: { learner: null, interviewer: null },
+      learnerTurns: 0,
+      levels: new Array(LEVEL_BARS).fill(0),
+      lastLevelAt: 0,
+      learnerSpeaking: false,
+      statusKey: "",
     });
-    await this.speaker.ready;
-    clearInterval(this.timer);
-    this.timer = setInterval(() => this.tick(), 250);
-    this.ask();
-  }
-
-  get current() {
-    return this.questions[this.questions.length - 1];
-  }
-
-  // -- Luồng câu hỏi ---------------------------------------------------------
-
-  async ask() {
-    this.phase = "reading";
-    this.readStart = performance.now();
-    this.readTotal = this.speaker.estimate(this.current.text);
-    this.render();
-    if (this.speaker.available && !this.muted) await this.speaker.speak(this.current.text);
-    if (this.ended || this.phase !== "reading") return;
-    this.startListening();
-  }
-
-  skipReading() {
-    this.speaker.stop();
-  }
-
-  replay() {
-    if (this.phase === "listening") {
-      this.draft = this.inputMode === "voice" ? this.listener.text : this.textarea?.value.trim() || "";
-      this.listener.stop();
-    }
-    this.speaker.stop();
-    this.ask();
-  }
-
-  toggleMute() {
-    this.muted = !this.muted;
-    this.speaker.muted = this.muted;
-    if (this.muted) this.speaker.stop();
-    else this.render();
-  }
-
-  startListening() {
-    this.phase = "listening";
-    this.listenStart = performance.now();
-    this.notHeard = false;
-    this.render();
-    if (this.inputMode === "voice") {
-      this.listener.start();
-      this.listener.final = this.draft;
-    } else if (this.textarea) {
-      this.textarea.value = this.draft;
-      this.textarea.focus();
-    }
-    this.draft = "";
-    this.onText();
-  }
-
-  // Dừng micro và mở chữ máy vừa nghe được để người học sửa trước khi gửi.
-  review() {
-    if (this.phase !== "listening" || !this.listener.text) return;
-    this.switchToTyping(true);
-  }
-
-  switchToTyping(reviewing = false) {
-    this.reviewing = reviewing;
-    const text = this.listener.text;
-    this.listener.stop();
-    this.inputMode = "typing";
-    this.draft = text;
-    this.startListening();
-  }
-
-  switchToVoice() {
-    const text = (this.textarea?.value || "").trim();
-    this.inputMode = "voice";
-    this.reviewing = false;
-    this.listenError = null;
-    this.draft = text ? `${text} ` : "";
-    this.startListening();
-  }
-
-  answerText() {
-    return this.inputMode === "voice" ? this.listener.text : (this.textarea?.value || "").trim();
-  }
-
-  submit() {
-    if (this.phase !== "listening") return;
-    const text = this.answerText();
-    if (!text) {
-      if (this.timeUp) this.done("time");
-      return;
-    }
-    this.listener.stop();
-    // Sau khi gửi bản đã sửa, câu sau lại trả lời bằng giọng nói.
-    if (this.reviewing) this.inputMode = "voice";
-    this.reviewing = false;
-    this.current.answer = text;
-    this.current.answerSeconds = (performance.now() - this.listenStart) / 1000;
-    this.phase = "thinking";
-    this.render();
-    this.send(text);
-  }
-
-  async send(text) {
-    this.error = null;
-    this.render();
-    let result;
-    try {
-      result = await api.sendAnswer(this.session.id, text);
-    } catch (error) {
-      if (this.ended) return;
-      if (error.status === 409) {
-        this.done("server");
-        return;
-      }
-      this.error = error.offline || !navigator.onLine ? "offline" : "ai";
-      this.render();
-      return;
-    }
-    if (this.ended) return;
-    this.answered += 1;
-    if (result.finished || this.answered >= this.setup.questionCount || this.timeUp) {
-      this.done(this.timeUp ? "time" : result.finished && this.answered < this.setup.questionCount ? "server" : "count");
-      return;
-    }
-    const action = await this.latestAction();
-    if (this.ended) return;
-    const follow = isFollowUp(action);
-    this.questions.push({
-      text: result.message,
-      kind: follow ? "follow" : "new",
-      follows: follow ? this.questions.length : null,
-      answer: "",
-      answerSeconds: 0,
-    });
-    this.ask();
-  }
-
-  /** Quyết định của giám khảo cho câu vừa trả lời (hỏi sâu hay chuyển chủ đề); không có thì bỏ qua. */
-  async latestAction() {
-    try {
-      const insights = await Promise.race([
-        api.getInsights(this.session.id),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 4000)),
-      ]);
-      return insights.evaluations[0]?.action || null;
-    } catch {
-      return null;
-    }
-  }
-
-  retrySend() {
-    this.send(this.current.answer);
-  }
-
-  done(reason) {
-    if (this.phase === "done" || this.ended) return;
-    this.phase = "done";
-    this.doneReason = reason;
-    this.speaker.stop();
-    this.listener.stop();
-    this.render();
-    setTimeout(() => this.finish(reason), DONE_DELAY_MS);
-  }
-
-  finish(reason) {
-    if (this.ended) return;
-    this.ended = true;
-    clearInterval(this.timer);
-    this.speaker.stop();
-    this.listener.stop();
-    if (this.dialog.open) this.dialog.close();
-    this.onFinish({
-      session: this.session,
-      answered: this.answered,
-      questions: this.questions.slice(0, this.answered),
-      usedSeconds: Math.min(this.usedMs, this.limitMs) / 1000,
-      reason,
-    });
-  }
-
-  confirmEnd() {
-    this.dialog.querySelector("#confirm-end-text").textContent = this.answered
-      ? `Giám khảo sẽ chấm dựa trên ${this.answered} câu bạn đã trả lời.`
-      : "Bạn chưa trả lời câu nào nên kết quả sẽ chưa có điểm.";
-    this.dialog.showModal();
-  }
-
-  // -- Đồng hồ và nghe -------------------------------------------------------
-
-  tick() {
-    if (this.ended) return;
-    const now = performance.now();
-    const dt = now - this.lastTick;
-    this.lastTick = now;
-    // Đồng hồ tạm dừng khi giám khảo suy nghĩ hoặc đã xong.
-    if (this.phase === "reading" || this.phase === "listening") this.usedMs += dt;
-    if (!this.timeUp && this.usedMs >= this.limitMs) this.onTimeUp();
+    this.build();
     this.renderClock();
-    if (this.phase === "reading") this.renderReading(now);
-    if (this.phase === "listening") this.checkSilence(now);
-  }
-
-  onTimeUp() {
-    this.timeUp = true;
-    if (this.phase === "listening" && this.answerText()) this.submit();
-    else if (this.phase === "reading" || this.phase === "listening") this.done("time");
-  }
-
-  onText() {
-    if (this.phase !== "listening") return;
-    if (this.notHeard && this.answerText()) {
-      this.notHeard = false;
-      this.render();
+    this.timer = setInterval(() => this.renderClock(), 1000);
+    if (this.mode === "text") {
+      this.addTurn("interviewer", message);
+      this.input.focus();
       return;
     }
-    this.renderTranscript();
-    this.renderFoot();
+    this.renderVoiceState();
+    await voice.start(session.id, bargeIn);
   }
 
-  checkSilence(now) {
-    if (this.inputMode !== "voice") return;
-    const hasText = Boolean(this.listener.text);
-    if (!hasText && !this.notHeard && now - this.listenStart >= NOT_HEARD_MS) {
-      this.notHeard = true;
-      this.render();
-      return;
-    }
-    this.renderListenTime(now);
-  }
+  // -- Dựng màn ----------------------------------------------------------------
 
-  restartAnswer() {
-    this.notHeard = false;
-    this.listenStart = performance.now();
-    if (this.inputMode === "voice") this.listener.restart();
-    else if (this.textarea) this.textarea.value = "";
-    this.render();
-  }
-
-  onListenError(reason) {
-    // Không nhận dạng được giọng nói thì chuyển sang gõ, giữ phần đã nói.
-    this.listenError = reason;
-    if (this.phase === "listening") this.switchToTyping();
-  }
-
-  // -- Hiển thị --------------------------------------------------------------
-
-  remainingSeconds() {
-    return Math.max(0, (this.limitMs - this.usedMs) / 1000);
-  }
-
-  render() {
-    if (!this.session) return;
-    this.renderStrip();
-    const parts = [];
-    if (!navigator.onLine) {
-      parts.push(notice("danger", img(ICONS.wifiOff, 18), "Mất kết nối mạng",
-        "Kiểm tra wifi hoặc 4G. Câu trả lời của bạn vẫn được giữ, có mạng lại thì bấm Thử lại."));
-    }
-    if (!this.speaker.available && this.phase !== "done") {
-      parts.push(notice("warn", maskIcon(ICONS.alert, 18), "Máy chưa có giọng đọc tiếng Việt.",
-        "Câu hỏi chỉ hiện bằng chữ. Trên Edge có sẵn giọng tiếng Việt; trên Windows có thể cài thêm trong Cài đặt › Thời gian và ngôn ngữ › Giọng nói."));
-    }
-    if (this.listenError && this.inputMode === "typing" && this.phase !== "done") {
-      const text = this.listenError === "blocked"
-        ? "Trình duyệt đang chặn micro nên bạn gõ câu trả lời thay vì nói."
-        : "Dịch vụ nhận dạng giọng nói không phản hồi nên bạn gõ câu trả lời thay vì nói.";
-      parts.push(notice("warn", maskIcon(ICONS.alert, 18), "Đã chuyển sang gõ câu trả lời", text));
-    }
-    if (this.phase === "done") parts.push(this.doneBox());
-    else {
-      parts.push(this.examinerCard());
-      parts.push(this.answerArea());
-      if (this.error) parts.push(this.errorBar());
-    }
-    this.root.replaceChildren(...parts);
-    this.renderClock();
-    if (this.phase === "listening") {
-      this.renderTranscript();
-      this.renderFoot();
-      this.renderListenTime(performance.now());
-      this.renderWave(this.listener.levels);
-    }
-  }
-
-  renderStrip() {
+  build() {
+    const limit = this.session.time_limit_seconds;
     this.stripClock = h("span", { class: "mono" });
+    this.teacherBtn = pillButton("Bảng giáo viên", { icon: ICONS.list14, onclick: () => this.toggleTeacher() });
+    this.teacherBtn.setAttribute("aria-pressed", "false");
     this.strip.replaceChildren(
-      h("div", { class: "strip-clock", id: "strip-clock" }, img(ICONS.clock16, 16), this.stripClock, `/ ${formatClock(this.limitMs / 1000, true)} đã dùng`),
-      h("div", { class: "strip-right" }, pillButton("Kết thúc sớm", { icon: ICONS.x, onclick: () => this.confirmEnd() })),
-    );
+      h("div", { class: "strip-clock" }, img(ICONS.clock16, 16), this.stripClock, `/ ${formatClock(limit, true)}`),
+      h("div", { class: "strip-right" },
+        this.teacherBtn,
+        pillButton("Kết thúc", { icon: ICONS.x, onclick: () => this.confirmEnd() })));
+
+    const column = [];
+    if (this.mode === "voice") column.push(this.buildVoiceCard());
+    column.push(this.buildChatCard());
+    this.doneBox = h("section", { class: "done-box", role: "status", hidden: true },
+      h("span", { class: "chip is-success" }, img(ICONS.check, 14), "Buổi phỏng vấn đã kết thúc"),
+      h("p", {}, "Bấm Xem kết quả để giám khảo tổng hợp điểm và viết nhận xét."),
+      pillButton("Xem kết quả", { className: "btn-pill btn-lg btn-solid", onclick: () => this.finish() }));
+    column.push(this.doneBox);
+
+    this.progressList = h("div", { class: "progress-list" });
+    this.evalList = h("div", { class: "eval-list" });
+    this.teacher = h("aside", { class: "result-card teacher-panel", hidden: true },
+      h("div", { class: "teacher-head" }, h("h2", {}, "Đánh giá ngầm"), h("span", { class: "chip chip-small" }, "Chỉ giáo viên")),
+      this.progressList,
+      h("p", { class: "label-caps" }, "Lượt chấm gần nhất"),
+      this.evalList);
+
+    this.root.classList.remove("with-teacher");
+    this.root.replaceChildren(h("div", { class: "interview-layout" },
+      h("div", { class: "interview-col" }, column),
+      this.teacher));
   }
 
-  renderClock() {
-    if (this.stripClock) {
-      this.stripClock.textContent = formatClock(this.usedMs / 1000, true);
-      this.stripClock.parentElement.classList.toggle("is-warn", this.remainingSeconds() <= WARN_S);
-    }
+  buildVoiceCard() {
+    this.avatar = h("span", { class: "avatar", "aria-hidden": "true" }, h("span", {}, "M"));
+    this.statusSlot = h("div", { class: "status-slot", "aria-live": "polite" });
+    this.waveEl = h("div", { class: "waveform voice-wave", "aria-hidden": "true" }, Array.from({ length: LEVEL_BARS }, () => h("i")));
+    this.errorSlot = h("div", { class: "voice-error" });
+    this.muteBtn = h("button", { type: "button", class: "btn-pill", onclick: () => this.voice && this.voice.setMuted(!this.voice.muted) });
+    const captions = h("input", { type: "checkbox", checked: true, onchange: (event) => this.setCaptions(event.target.checked) });
+    return h("section", { class: "card-lg voice-card" },
+      h("div", { class: "examiner-head" },
+        h("div", { class: "examiner" }, this.avatar,
+          h("div", { class: "examiner-name" }, h("strong", {}, "Minh · Giám khảo AI"), h("span", {}, `Hỏi theo ${this.session.document_title}`))),
+        this.statusSlot),
+      this.waveEl,
+      this.errorSlot,
+      h("div", { class: "control-row" }, this.muteBtn, h("label", { class: "check" }, captions, h("span", {}, "Hiện phụ đề"))));
   }
 
-  renderReading(now) {
-    if (!this.readFill) return;
-    const elapsed = Math.min(this.readTotal, (now - this.readStart) / 1000);
-    this.readFill.style.setProperty("--value", `${(elapsed / this.readTotal) * 100}%`);
-    this.readTime.textContent = `${formatClock(elapsed)} / ${formatClock(this.readTotal)}`;
-  }
-
-  examinerCard() {
-    const reading = this.phase === "reading";
-    const thinking = this.phase === "thinking";
-    let status;
-    if (reading) {
-      status = h("span", { class: "chip chip-solid status-chip" },
-        h("span", { class: "wave-mini", "aria-hidden": "true" }, h("i"), h("i"), h("i"), h("i"), h("i")),
-        this.speaker.available && !this.muted ? "Đang đọc câu hỏi" : "Câu hỏi mới");
-    } else if (thinking) {
-      status = h("span", { class: "chip status-chip", style: "color: var(--ink); font-weight: 600" }, img(ICONS.loader14, 14, "spin"), "Đang suy nghĩ");
-    } else {
-      status = h("span", { class: "chip is-success status-chip" }, img(ICONS.dot, 6), "Đang chờ bạn trả lời");
-    }
-    const head = h("div", { class: "examiner-head" },
-      h("div", { class: "examiner" },
-        h("span", { class: `avatar${reading && this.speaker.available && !this.muted ? " is-speaking" : ""}`, "aria-hidden": "true" }, h("span", {}, "M")),
-        h("div", { class: "examiner-name" }, h("strong", {}, "Anh Minh"), h("span", {}, `Hỏi theo ${this.document.title}`))),
-      status);
-
-    if (thinking) {
-      return h("section", { class: "card-lg", "aria-live": "polite" }, head,
-        h("div", { class: "skeleton", "aria-hidden": "true" }, h("span"), h("span"), h("span")),
-        h("p", { class: "thinking-text" }, this.error
-          ? "Giám khảo chưa nhận được câu trả lời của bạn. Bấm Thử lại ở bên dưới."
-          : "Giám khảo đang cân nhắc câu trả lời của bạn để chọn bước tiếp theo: hỏi đào sâu thêm, hay chuyển sang chủ đề mới."));
-    }
-
-    const canSpeak = this.speaker.available;
-    const controls = [];
-    if (reading) {
-      if (canSpeak && !this.muted) {
-        this.readFill = h("span");
-        this.readTime = h("span", { class: "mono" });
-        controls.push(h("div", { class: "reading-row" }, h("div", { class: "thin-track" }, this.readFill), this.readTime));
-      } else {
-        this.readFill = null;
-      }
-      controls.push(h("div", { class: "control-row" },
-        canSpeak ? pillButton("Nghe lại", { icon: ICONS.replay, onclick: () => this.replay() }) : null,
-        canSpeak ? pillButton(this.muted ? "Bật tiếng" : "Tắt tiếng", { icon: ICONS.mute, onclick: () => this.toggleMute() }) : null,
-        pillButton("Bỏ qua, trả lời ngay", { icon: ICONS.skip, onclick: () => this.skipReading() })));
-    } else {
-      this.readFill = null;
-      controls.push(h("div", { class: "control-row" },
-        canSpeak ? pillButton("Nghe lại", { icon: ICONS.replay, onclick: () => this.replay() }) : null,
-        h("span", { class: "note" }, this.inputMode === "voice" ? "Câu hỏi đã đọc xong, micro đang bật." : "Gõ câu trả lời của bạn bên dưới.")));
-    }
-    return h("section", { class: "card-lg", "aria-live": "polite" }, head,
-      h("p", { class: "question-text" }, this.current.text), controls);
-  }
-
-  answerArea() {
-    this.textarea = null;
-    this.transcriptEl = null;
-    this.footEl = null;
-    if (this.phase === "reading") {
-      return h("section", { class: "answer-card is-waiting" },
-        h("span", { class: "mic-off-circle" }, img(ICONS.micOff28, 28)),
-        h("p", { class: "waiting-title" }, this.inputMode === "voice" ? "Micro sẽ tự bật khi giám khảo đọc xong" : "Ô trả lời sẽ mở khi giám khảo đọc xong"),
-        h("p", { class: "waiting-hint" }, 'Hoặc bấm "Bỏ qua, trả lời ngay" để trả lời luôn'));
-    }
-    if (this.phase === "thinking") {
-      const q = this.current;
-      return h("section", { class: "answer-card is-sent" },
-        h("div", { class: "sent-head" },
-          h("span", { class: "label-caps" }, `Câu trả lời của bạn · Câu ${this.questions.length}`),
-          this.error ? h("span", { class: "chip is-warn" }, "Chưa gửi được")
-            : h("span", { class: "chip is-success" }, img(ICONS.check, 14), `Đã gửi · ${formatClock(q.answerSeconds)}`)),
-        h("p", { class: "sent-text" }, q.answer),
-        h("p", { class: "sent-foot" }, img(ICONS.micOff14, 14), "Micro đã tắt trong lúc giám khảo suy nghĩ"));
-    }
-
-    // Đang nghe hoặc đang gõ.
-    const voice = this.inputMode === "voice";
-    const body = [];
-    if (voice) {
-      this.listenTimeEl = h("span", { class: "mono" });
-      this.waveEl = h("div", { class: "waveform", "aria-hidden": "true" }, Array.from({ length: LEVEL_BARS }, () => h("i")));
-      body.push(h("div", { class: "listen-row" },
-        h("div", { class: "listen-state" }, h("span", { class: "live" }), h("strong", {}, "Đang nghe"), this.listenTimeEl),
-        this.waveEl));
-      if (this.notHeard) {
-        body.push(h("div", { class: "not-heard", role: "status" },
-          h("span", { class: "circle" }, img(ICONS.micOff20, 20)),
-          h("strong", {}, "Chưa nghe thấy bạn nói"),
-          h("span", {}, "Kiểm tra micro hoặc nói gần hơn."),
-          pillButton("Nói lại", { icon: ICONS.replay, onclick: () => this.restartAnswer() })));
-      } else {
-        this.transcriptEl = h("p", { class: "transcript", "aria-live": "polite" });
-        body.push(this.transcriptEl);
-      }
-    } else {
-      this.textarea = h("textarea", {
+  buildChatCard() {
+    this.chat = h("div", { class: "chat", "aria-live": "polite" });
+    this.captionsOff = h("p", { class: "muted", hidden: true }, "Phụ đề đang tắt. Hội thoại vẫn được ghi lại để chấm điểm.");
+    const parts = [h("p", { class: "label-caps" }, this.mode === "voice" ? "Phụ đề hội thoại" : "Hội thoại"), this.captionsOff, this.chat];
+    if (this.mode === "text") {
+      this.input = h("textarea", {
         class: "answer-input",
-        id: "answer-input",
-        rows: "4",
+        rows: "3",
         maxlength: "4000",
         "aria-label": "Câu trả lời của bạn",
-        placeholder: this.reviewing ? "Sửa câu trả lời…" : "Gõ câu trả lời… (Enter để gửi, Shift + Enter để xuống dòng)",
-        oninput: () => this.onText(),
+        placeholder: "Nhập câu trả lời… (Enter để gửi, Shift + Enter để xuống dòng)",
         onkeydown: (event) => {
           if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
             event.preventDefault();
-            this.submit();
+            this.sendMessage();
           }
         },
       });
-      body.push(this.textarea);
+      this.sendBtn = pillButton("Gửi", { icon: ICONS.checkWhite16, iconSize: 16, className: "btn-pill btn-lg btn-solid", onclick: () => this.sendMessage() });
+      this.composer = h("div", { class: "composer" }, this.input, this.sendBtn);
+      parts.push(this.composer);
     }
-    body.push(h("hr", { class: "divider" }));
-    this.footEl = h("div", { class: "answer-foot" });
-    body.push(this.footEl);
-    const card = h("section", { class: "answer-card is-listening" }, body);
-    if (!Listener.supported || this.reviewing) return card;
-    return h("div", { class: "flow-actions-col" }, card,
-      voice
-        ? pillButton("Chuyển sang viết câu trả lời", { onclick: () => this.switchToTyping(), className: "btn-pill mode-switch" })
-        : pillButton("Chuyển sang nói câu trả lời", { icon: ICONS.mic, onclick: () => this.switchToVoice(), className: "btn-pill mode-switch" }));
+    return h("section", { class: "card-lg chat-card" }, parts);
   }
 
-  renderTranscript() {
-    if (!this.transcriptEl) return;
-    const { final, interim } = this.listener;
-    if (!final && !interim) {
-      this.transcriptEl.replaceChildren(h("span", { class: "placeholder" }, "Bắt đầu nói câu trả lời của bạn…"));
-      return;
+  // -- Hội thoại ---------------------------------------------------------------
+
+  scrollChat() {
+    this.chat.scrollTop = this.chat.scrollHeight;
+  }
+
+  addTurn(role, text) {
+    const label = role === "interviewer" ? "Giám khảo AI" : this.session.learner_name;
+    const turn = h("div", { class: `turn${role === "learner" ? " is-learner" : ""}` }, h("span", {}, label), h("p", { class: "turn-text" }, text));
+    if (role === "learner") this.learnerTurns += 1;
+    this.chat.append(turn);
+    this.scrollChat();
+    return turn;
+  }
+
+  appendTranscript(role, text) {
+    if (this.ended) return;
+    let turn = this.bubbles[role];
+    if (!turn) {
+      turn = this.addTurn(role, "");
+      // Lời người học thuộc về lượt hiện tại nên luôn đứng trước câu trả lời của AI trong cùng lượt.
+      if (role === "learner" && this.bubbles.interviewer) this.chat.insertBefore(turn, this.bubbles.interviewer);
+      this.bubbles[role] = turn;
     }
-    this.transcriptEl.replaceChildren(final ? `${final} ` : "", interim ? h("span", { class: "interim" }, interim) : "");
+    turn.querySelector(".turn-text").textContent += text;
+    this.scrollChat();
   }
 
-  renderFoot() {
-    if (!this.footEl) return;
-    const voice = this.inputMode === "voice";
-    const hasText = Boolean(this.answerText());
-    let left;
-    if (voice) {
-      left = h("div", { class: "foot-left" }, img(ICONS.micOn64, 64),
-        h("div", { class: "foot-text" },
-          h("span", {}, "Chữ đen là phần đã chốt, chữ xám đang nhận dạng"),
-          h("span", {}, "Bấm Xong để xem lại và sửa chữ trước khi gửi")));
-    } else if (this.reviewing) {
-      left = h("div", { class: "foot-text" }, h("span", {}, "Sửa lại những chỗ máy nghe nhầm"), h("span", {}, "Bấm Nói tiếp để nói thêm, hoặc Gửi khi đã xong"));
-    } else {
-      left = h("div", { class: "foot-text" }, h("span", {}, "Bấm Gửi khi trả lời xong"), h("span", {}, "Câu trả lời được giữ nếu mạng chập chờn"));
+  endTranscriptTurn(interrupted) {
+    if (interrupted && this.bubbles.interviewer) this.bubbles.interviewer.classList.add("is-interrupted");
+    this.bubbles = { learner: null, interviewer: null };
+  }
+
+  setCaptions(on) {
+    this.chat.hidden = !on;
+    this.captionsOff.hidden = on;
+    if (on) this.scrollChat();
+  }
+
+  async sendMessage() {
+    const text = this.input.value.trim();
+    if (!text || this.sending || this.finished) return;
+    this.sending = true;
+    this.sendBtn.disabled = true;
+    this.input.value = "";
+    const turn = this.addTurn("learner", text);
+    const typing = h("div", { class: "typing", "aria-label": "Giám khảo đang soạn câu trả lời" }, h("span"), h("span"), h("span"));
+    this.chat.append(typing);
+    this.scrollChat();
+    try {
+      const result = await api.sendAnswer(this.session.id, text);
+      if (this.ended) return;
+      typing.remove();
+      this.addTurn("interviewer", result.message);
+      if (result.finished) this.markFinished();
+    } catch (error) {
+      // Máy chủ không lưu lượt bị lỗi nên trả lại nội dung để người học gửi lại.
+      typing.remove();
+      turn.remove();
+      this.learnerTurns -= 1;
+      this.input.value = text;
+      if (error.status === 409) this.markFinished();
+      toast(error.message);
+    } finally {
+      this.sending = false;
+      this.sendBtn.disabled = false;
+      if (!this.finished && !this.ended) this.input.focus();
+      this.refreshInsights();
     }
-    this.footEl.replaceChildren(left, h("div", { class: "foot-buttons" },
-      this.reviewing
-        ? pillButton("Nói tiếp", { icon: ICONS.mic, iconSize: 14, className: "btn-pill btn-lg", onclick: () => this.switchToVoice() })
-        : pillButton(voice ? "Nói lại" : "Xoá", { icon: ICONS.replay, iconSize: 14, className: "btn-pill btn-lg", onclick: () => this.restartAnswer() }),
-      pillButton(voice ? "Xong" : "Gửi", { icon: ICONS.checkWhite16, iconSize: 16, className: "btn-pill btn-lg btn-solid", disabled: !hasText, onclick: () => (voice ? this.review() : this.submit()) })));
   }
 
-  renderListenTime(now) {
-    if (this.listenTimeEl) this.listenTimeEl.textContent = formatClock((now - this.listenStart) / 1000);
+  // -- Giọng nói ---------------------------------------------------------------
+
+  renderVoiceState() {
+    const voice = this.voice;
+    if (!voice || !this.statusSlot || this.mode !== "voice") return;
+    const state = voice.visualState;
+    this.avatar.classList.toggle("is-speaking", state === "speaking");
+    this.muteBtn.replaceChildren(img(voice.muted ? ICONS.mic : ICONS.micOff14, 14), h("span", {}, voice.muted ? "Bật mic" : "Tắt mic"));
+    this.muteBtn.setAttribute("aria-pressed", String(voice.muted));
+    this.muteBtn.disabled = state === "ended" || state === "error";
+
+    const label = state === "listening" && this.learnerSpeaking ? "Bạn đang nói…" : voice.label;
+    const key = `${state}|${label}`;
+    if (key !== this.statusKey) {
+      this.statusKey = key;
+      this.statusSlot.replaceChildren(statusChip(state, label));
+    }
+    this.errorSlot.replaceChildren(voice.error ? notice("danger", img(ICONS.alert, 18), "Giọng nói gặp lỗi", voice.error) : "");
   }
 
-  renderWave(levels) {
+  renderLevel(level) {
     if (!this.waveEl) return;
+    const speaking = level > SPEAKING_LEVEL;
+    if (speaking !== this.learnerSpeaking) {
+      this.learnerSpeaking = speaking;
+      this.renderVoiceState();
+    }
+    const now = performance.now();
+    if (now - this.lastLevelAt < LEVEL_SAMPLE_MS) return;
+    this.lastLevelAt = now;
+    this.levels = [...this.levels.slice(1), Math.min(1, level / FULL_SCALE_LEVEL)];
     const bars = this.waveEl.children;
-    levels.forEach((value, i) => {
-      if (bars[i]) bars[i].style.height = `${Math.round(4 + Math.min(1, value) * 28)}px`;
+    this.levels.forEach((value, i) => {
+      bars[i].style.height = `${Math.round(4 + value * 28)}px`;
     });
   }
 
-  errorBar() {
-    const offline = this.error === "offline";
-    return h("div", { class: "ai-error", role: "alert" },
-      maskIcon(offline ? ICONS.wifiOff : ICONS.alert, 18),
-      h("p", {}, offline
-        ? "Mất kết nối mạng. Câu trả lời của bạn vẫn được giữ."
-        : "Không kết nối được với giám khảo AI. Câu trả lời của bạn vẫn được giữ."),
-      h("button", { type: "button", class: "btn-pill", onclick: () => this.retrySend() }, "Thử lại"));
+  // -- Kết thúc ----------------------------------------------------------------
+
+  renderClock() {
+    if (!this.stripClock) return;
+    const elapsed = (Date.now() - this.startedAt) / 1000;
+    this.stripClock.textContent = formatClock(elapsed, true);
+    this.stripClock.parentElement.classList.toggle("is-warn", elapsed >= this.session.time_limit_seconds);
   }
 
-  doneBox() {
-    const timeUp = this.doneReason === "time";
-    const chip = timeUp
-      ? h("span", { class: "chip is-warn" }, img(ICONS.clock14, 14), this.answered ? "Hết giờ · đã tự gửi phần bạn đã nói" : "Hết giờ phỏng vấn")
-      : h("span", { class: "chip is-success" }, img(ICONS.check, 14), this.doneReason === "server"
-        ? `Giám khảo đã hỏi hết nội dung · ${this.answered} câu`
-        : `Đã trả lời ${this.answered}/${this.setup.questionCount} câu`);
-    return h("section", { class: "done-box", role: "status" }, chip, h("p", {}, "Chuyển sang chấm điểm sau 2 giây…"));
+  markFinished() {
+    if (this.finished || !this.session) return;
+    this.finished = true;
+    clearInterval(this.timer);
+    if (this.composer) this.composer.hidden = true;
+    this.doneBox.hidden = false;
+    this.refreshInsights();
   }
 
-  /** Dừng hẳn khi rời màn (ví dụ tải lại trang). */
+  confirmEnd() {
+    if (this.finished) this.finish();
+    else this.dialog.showModal();
+  }
+
+  finish() {
+    if (this.ended || !this.session) return;
+    const usedSeconds = (Date.now() - this.startedAt) / 1000;
+    this.dispose();
+    this.onFinish({ session: this.session, answered: this.learnerTurns, usedSeconds });
+  }
+
+  /** Dừng hẳn: tắt giọng nói và các bộ đếm. */
   dispose() {
     this.ended = true;
     clearInterval(this.timer);
-    this.speaker.stop();
-    this.listener.stop();
+    clearInterval(this.insightsTimer);
+    if (this.voice) this.voice.stop();
+    if (this.dialog.open) this.dialog.close();
+  }
+
+  // -- Bảng giáo viên ----------------------------------------------------------
+
+  toggleTeacher() {
+    const open = this.teacher.hidden;
+    this.teacher.hidden = !open;
+    this.root.classList.toggle("with-teacher", open);
+    this.teacherBtn.setAttribute("aria-pressed", String(open));
+    this.teacherBtn.classList.toggle("is-on", open);
+    clearInterval(this.insightsTimer);
+    if (open) {
+      this.refreshInsights();
+      this.insightsTimer = setInterval(() => this.refreshInsights(), INSIGHTS_MS);
+    }
+  }
+
+  async refreshInsights() {
+    if (!this.session || !this.teacher || this.teacher.hidden) return;
+    try {
+      this.renderInsights(await api.getInsights(this.session.id));
+    } catch {
+      // Lần làm mới sau sẽ thử lại.
+    }
+  }
+
+  renderInsights(data) {
+    this.progressList.replaceChildren(...data.concepts.map((c) => {
+      const meta = [
+        c.evidence_count ? `${c.score}/100` : "Chưa có dữ liệu",
+        `Bloom cao nhất: ${BLOOM[c.max_bloom] || "—"}`,
+        `ý chính ${c.covered_key_points}/${c.total_key_points}`,
+      ];
+      if (c.hints) meta.push(`${c.hints} gợi ý`);
+      if (c.rote_flags) meta.push(`${c.rote_flags} lần có dấu hiệu học thuộc`);
+      return h("div", { class: `progress-item${c.id === data.current_concept_id ? " is-current" : ""}` },
+        h("div", { class: "progress-top" },
+          h("strong", {}, c.name),
+          h("span", { class: `chip chip-small ${STATUS_CHIP[c.status] || "chip-white"}` }, STATUS[c.status] || c.status)),
+        h("div", { class: "thin-track progress-bar", style: `--value: ${c.evidence_count ? c.score : 0}%` }, h("span")),
+        h("p", { class: "progress-meta" }, meta.join(" · ")),
+        c.misconceptions.length ? h("p", { class: "progress-warn" }, `Hiểu lầm: ${c.misconceptions.join("; ")}`) : null);
+    }));
+
+    if (!data.evaluations.length) {
+      this.evalList.replaceChildren(h("p", { class: "muted" }, "Chưa có lượt nào được chấm."));
+      return;
+    }
+    this.evalList.replaceChildren(...data.evaluations.map((e) =>
+      h("article", { class: "log-item" },
+        h("div", { class: "log-head" },
+          h("strong", {}, e.concept_name),
+          h("span", { class: "spacer" }),
+          e.action ? h("span", { class: "chip chip-white chip-small" }, ACTIONS[e.action] || e.action) : null),
+        h("p", { class: "said" }, `“${truncate(e.answer, 180)}”`),
+        h("div", { class: "chip-row" },
+          scoreChip("Đúng", e.correctness),
+          scoreChip("Đủ ý", e.completeness),
+          scoreChip("Lập luận", e.reasoning),
+          h("span", { class: "chip chip-white chip-small" }, `Bloom: ${BLOOM[e.bloom_level] || "—"}`),
+          e.rote_signal === "high" ? h("span", { class: "chip chip-danger chip-small" }, "Nghi học thuộc") : null),
+        h("p", { class: "summary" }, e.summary),
+        e.reason ? h("p", {}, `Quyết định: ${e.reason}`) : null)));
+  }
+}
+
+function scoreChip(label, value) {
+  return h("span", { class: "chip chip-white chip-small" }, `${label} ${value}/4`);
+}
+
+function statusChip(state, label) {
+  switch (state) {
+    case "speaking":
+      return h("span", { class: "chip chip-solid status-chip" },
+        h("span", { class: "wave-mini", "aria-hidden": "true" }, h("i"), h("i"), h("i"), h("i"), h("i")), label);
+    case "listening":
+      return h("span", { class: "chip is-success status-chip" }, img(ICONS.dot, 6, "live-dot"), label);
+    case "muted":
+      return h("span", { class: "chip is-warn status-chip" }, img(ICONS.micOff14, 14), label);
+    case "ended":
+      return h("span", { class: "chip is-success status-chip" }, img(ICONS.check, 14), label);
+    case "error":
+      return h("span", { class: "chip chip-danger status-chip" }, maskIcon(ICONS.alert, 14), label);
+    default:
+      return h("span", { class: "chip status-chip" }, img(ICONS.loader14, 14, "spin"), label);
   }
 }

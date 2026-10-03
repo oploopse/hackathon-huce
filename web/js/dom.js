@@ -16,6 +16,7 @@ export const ICONS = {
   dot: "/assets/icons/dot-live.svg",
   dotDanger: "/assets/icons/dot-danger.svg",
   file: "/assets/icons/file.svg",
+  filePrimary: "/assets/icons/file-primary.svg",
   headphones14: "/assets/icons/headphones-14.svg",
   headphones16: "/assets/icons/headphones-16.svg",
   list14: "/assets/icons/list-14.svg",
@@ -81,8 +82,6 @@ export function pillButton(label, { icon = null, iconSize = 14, onclick, classNa
   return h("button", { type: "button", class: className, onclick, disabled }, icon ? img(icon, iconSize) : null, h("span", {}, label));
 }
 
-export const numberVi = new Intl.NumberFormat("vi-VN");
-
 /** 75 → "1:15"; với pad = true → "01:15". */
 export function formatClock(totalSeconds, pad = false) {
   const seconds = Math.max(0, Math.floor(totalSeconds));
@@ -100,18 +99,22 @@ export function formatDuration(totalSeconds) {
   return minutes ? `${minutes} phút` : `${rest} giây`;
 }
 
-export function formatRange({ from, to }) {
-  return from === to ? `tr. ${from}` : `tr. ${from}–${to}`;
-}
-
-export function roundWords(count) {
-  if (count < 100) return count;
-  if (count < 1000) return Math.round(count / 10) * 10;
-  return Math.round(count / 100) * 100;
-}
-
 export function truncate(text, max) {
   return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+}
+
+let toastTimer = 0;
+
+/** Thông báo ngắn ở cuối màn hình; kind = "error" hoặc "warn". */
+export function toast(message, kind = "error") {
+  const node = $("#toast");
+  node.textContent = message;
+  node.className = `toast${kind === "warn" ? " is-warn" : ""}`;
+  node.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    node.hidden = true;
+  }, 6000);
 }
 
 export function reducedMotion() {

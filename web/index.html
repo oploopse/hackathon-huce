@@ -32,20 +32,20 @@
   <main class="setup view" id="view-setup">
     <div class="page-title">
       <h1>Thiết lập buổi phỏng vấn</h1>
-      <p>Tải tài liệu, chọn phạm vi trang, số câu hỏi và thời gian. AI chỉ đặt câu hỏi dựa trên đúng những trang bạn chọn.</p>
+      <p>Tải tài liệu lên, AI sẽ soạn câu hỏi, trò chuyện với bạn, hỏi sâu khi cần và đánh giá ngầm trong suốt buổi.</p>
     </div>
 
     <form id="setup-form" class="setup-form" novalidate>
       <section class="field" id="field-document" aria-labelledby="document-title">
         <div class="field-head">
           <h2 id="document-title">Tài liệu</h2>
-          <span class="field-hint">PDF có lớp chữ · tối đa 50 MB</span>
+          <span class="field-hint">PDF, DOCX, TXT hoặc MD</span>
         </div>
 
         <div class="dropzone" id="dropzone">
-          <input id="file-input" class="visually-hidden" type="file" accept="application/pdf,.pdf">
+          <input id="file-input" class="visually-hidden" type="file" accept=".pdf,.docx,.txt,.md">
           <span class="dropzone-icon"><img src="/assets/icons/upload.svg" width="22" height="22" alt=""></span>
-          <label class="dropzone-title" for="file-input">Kéo thả file PDF vào đây, hoặc chọn file từ máy</label>
+          <label class="dropzone-title" for="file-input">Kéo thả file vào đây, hoặc chọn file từ máy</label>
           <p class="dropzone-sub">Giáo trình, slide bài giảng hoặc tài liệu kỹ thuật</p>
           <div class="dropzone-actions">
             <button type="button" class="btn-pill" data-action="use-sample">
@@ -55,86 +55,52 @@
           </div>
         </div>
 
-        <div class="file-row" id="file-row" hidden>
-          <span class="file-row-icon"><img src="/assets/icons/file-primary.svg" width="18" height="18" alt=""></span>
-          <div class="file-row-text">
-            <span class="file-row-name" id="file-name"></span>
-            <span class="file-row-meta" id="file-meta"></span>
-          </div>
-          <button type="button" class="icon-btn" id="file-remove" aria-label="Bỏ file này và chọn file khác">
-            <img src="/assets/icons/x.svg" width="14" height="14" alt="">
-          </button>
-        </div>
-
         <div class="document-status" id="document-status" aria-live="polite"></div>
-      </section>
 
-      <section class="field" id="field-range" aria-labelledby="range-title">
-        <div class="field-head">
-          <h2 id="range-title">Phạm vi trang</h2>
-          <span class="chip" id="range-chip" hidden></span>
-        </div>
-        <div class="panel range-panel">
-          <div class="range-inputs">
-            <div class="text-field" id="page-from-field">
-              <label for="page-from">Từ trang</label>
-              <input id="page-from" type="text" inputmode="numeric" autocomplete="off" maxlength="5" disabled aria-describedby="page-from-error">
-              <p class="text-field-error" id="page-from-error" hidden></p>
-            </div>
-            <span class="range-dash" aria-hidden="true">–</span>
-            <div class="text-field" id="page-to-field">
-              <label for="page-to">Đến trang</label>
-              <input id="page-to" type="text" inputmode="numeric" autocomplete="off" maxlength="5" disabled aria-describedby="page-to-error">
-              <p class="text-field-error" id="page-to-error" hidden></p>
-            </div>
-          </div>
-          <div class="coverage">
-            <div class="coverage-text">
-              <span id="coverage-total">Chưa có tài liệu</span>
-              <strong id="coverage-range"></strong>
-            </div>
-            <div class="coverage-bar" aria-hidden="true"><span id="coverage-fill"></span></div>
-          </div>
-        </div>
-        <p class="field-note" id="range-note" hidden></p>
-      </section>
-
-      <section class="field" aria-labelledby="questions-title">
-        <div class="field-head">
-          <h2 id="questions-title">Số câu hỏi</h2>
-          <span class="field-hint">Kéo để chọn từ 5 đến 10 câu, tính cả câu hỏi đào sâu</span>
-        </div>
-        <div class="panel slider-panel">
-          <div class="slider-head">
-            <p class="slider-value"><output id="questions-output" for="questions">5</output><span>câu</span></p>
-          </div>
-          <input type="range" class="slider" id="questions" min="5" max="10" step="1" value="5" aria-labelledby="questions-title">
-          <div class="slider-scale" id="questions-scale" aria-hidden="true"></div>
+        <div class="doc-list-wrap" id="doc-list-wrap" hidden>
+          <p class="label-caps">Tài liệu đã tải</p>
+          <ul class="doc-list" id="doc-list"></ul>
         </div>
       </section>
 
-      <section class="field" aria-labelledby="duration-title">
+      <section class="field" id="field-concepts" aria-labelledby="concepts-title" hidden>
         <div class="field-head">
-          <h2 id="duration-title">Thời gian phỏng vấn</h2>
-          <span class="field-hint">Tổng thời gian cho cả buổi, từ 5 đến 15 phút</span>
+          <h2 id="concepts-title">Các chủ đề sẽ hỏi</h2>
+          <span class="chip" id="concept-count"></span>
         </div>
-        <div class="panel slider-panel">
-          <div class="slider-head">
-            <p class="slider-value"><output id="duration-output" for="duration">15:00</output><span>cho cả buổi</span></p>
-            <div class="presets" role="group" aria-label="Chọn nhanh thời gian phỏng vấn">
-              <button type="button" class="preset" data-minutes="5" aria-pressed="false" aria-label="5 phút">5:00</button>
-              <button type="button" class="preset" data-minutes="10" aria-pressed="false" aria-label="10 phút">10:00</button>
-              <button type="button" class="preset" data-minutes="15" aria-pressed="true" aria-label="15 phút">15:00</button>
-            </div>
+        <div class="panel doc-detail">
+          <h3 class="doc-detail-title" id="doc-title"></h3>
+          <p class="doc-detail-summary" id="doc-summary"></p>
+          <p class="field-note is-warn" id="doc-truncated" hidden>Tài liệu dài nên chỉ phần đầu được dùng để soạn câu hỏi.</p>
+          <ul class="concept-list" id="concept-list"></ul>
+        </div>
+      </section>
+
+      <section class="field" aria-labelledby="learner-title">
+        <div class="field-head">
+          <h2 id="learner-title">Tên người học</h2>
+        </div>
+        <div class="text-field is-wide">
+          <input id="learner-name" type="text" maxlength="60" placeholder="Ví dụ: Lan" autocomplete="off" aria-labelledby="learner-title">
+        </div>
+      </section>
+
+      <section class="field" aria-labelledby="mode-title">
+        <div class="field-head">
+          <h2 id="mode-title">Hình thức</h2>
+          <span class="field-hint" id="time-limit-hint"></span>
+        </div>
+        <div class="panel mode-panel">
+          <div class="presets" role="group" aria-labelledby="mode-title">
+            <button type="button" class="preset mode-option" data-mode="voice" aria-pressed="true">Giọng nói</button>
+            <button type="button" class="preset mode-option" data-mode="text" aria-pressed="false">Nhắn tin</button>
           </div>
-          <input type="range" class="slider" id="duration" min="5" max="15" step="1" value="15" aria-labelledby="duration-title">
-          <div class="slider-ends" aria-hidden="true"><span>5:00</span><span>15:00</span></div>
-          <p class="panel-note">
-            <img src="/assets/icons/clock.svg" width="14" height="14" alt="">
-            <span>Hết giờ thì phần đã nói được tự gửi và buổi phỏng vấn chuyển sang chấm điểm.</span>
-          </p>
+          <p class="panel-note" id="mode-note"></p>
+          <label class="check" id="barge-in-row">
+            <input type="checkbox" id="barge-in" checked>
+            <span>Cho phép ngắt lời AI. Nên đeo tai nghe, nếu không AI có thể nghe thấy chính giọng của nó.</span>
+          </label>
         </div>
-        <p class="field-note" id="duration-summary"></p>
       </section>
 
       <section class="field" id="field-mic" aria-labelledby="mic-title">
@@ -179,14 +145,13 @@
     </form>
   </main>
 
-  <main class="center-view view" id="view-prepare" hidden></main>
   <main class="interview-main view" id="view-interview" hidden></main>
   <main class="center-view view" id="view-grading" hidden></main>
   <main class="result-main view" id="view-result" hidden></main>
 
   <dialog class="confirm-dialog" id="confirm-end" aria-labelledby="confirm-end-title">
     <h2 id="confirm-end-title">Kết thúc buổi phỏng vấn?</h2>
-    <p id="confirm-end-text"></p>
+    <p id="confirm-end-text">Giám khảo sẽ chấm dựa trên phần bạn đã trả lời.</p>
     <div class="flow-actions">
       <button type="button" class="btn-pill" value="cancel" id="confirm-end-cancel">Tiếp tục phỏng vấn</button>
       <button type="button" class="btn-pill btn-solid" value="end" id="confirm-end-ok">Kết thúc và chấm</button>
@@ -195,7 +160,8 @@
 
   <footer class="app-footer" id="app-footer">
     <p>© 2026 Socratic Exam · Hackathon CNTT 2026 · Khoa CNTT, Trường Đại học Xây dựng Hà Nội</p>
-    <p>Giọng nói được xử lý qua Google (nhận dạng) và ElevenLabs (giọng đọc)</p>
   </footer>
+
+  <div class="toast" id="toast" role="status" hidden></div>
 </body>
 </html>

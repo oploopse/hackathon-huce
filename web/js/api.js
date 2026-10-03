@@ -1,5 +1,4 @@
-// Adapter tới backend Python sẵn có (app/main.py).
-// Khi backend làm xong POST /api/interviews theo web/API_CONTRACT.md, chỉ cần đổi file này.
+// Gọi API của backend (app/main.py), cùng các endpoint mà giao diện cũ (web/app.js) dùng.
 
 export class ApiError extends Error {
   constructor(message, status) {
@@ -82,27 +81,32 @@ async function request(path, options = {}, retryAuth = true) {
   }
 }
 
-/**
- * Gửi chữ đã trích trên trình duyệt để backend soạn bản đồ kiến thức.
- * Backend hiện chỉ nhận file, nên chữ được gói thành một file Markdown, mỗi trang mở đầu bằng "## Trang n".
- * Trả về { id, title, summary, truncated, concepts: [{ id, name, summary, importance }] }.
- */
-export function createDocument({ filename, pageFrom, pageTo, pageTexts }) {
-  const sections = [];
-  for (let page = pageFrom; page <= pageTo; page += 1) {
-    const text = (pageTexts.get(page) || "").trim();
-    if (text) sections.push(`## Trang ${page}\n\n${text}`);
-  }
-  const base = filename.replace(/\.pdf$/i, "");
-  const name = pageFrom === pageTo ? `${base}_tr${pageFrom}.md` : `${base}_tr${pageFrom}-${pageTo}.md`;
-  const form = new FormData();
-  form.append("file", new File([sections.join("\n\n")], name, { type: "text/markdown" }));
-  return request("/api/documents", { method: "POST", form, timeoutMs: 180_000 });
+/** { llm_configured, models: { brain, fast, live }, interview_minutes } */
+export function health() {
+  return request("/api/health", { timeoutMs: 10_000 });
 }
 
-/** Mở phiên phỏng vấn dạng chữ; giọng nói do trình duyệt lo. Trả về { session, message }. */
-export function startSession(documentId) {
-  return request("/api/sessions", { method: "POST", json: { document_id: documentId, learner_name: "bạn", mode: "text" } });
+/** Các tài liệu đã tải, mới nhất trước. */
+export function listDocuments() {
+  return request("/api/documents", { timeoutMs: 15_000 });
+}
+
+/**
+ * Tải file gốc lên để backend đọc và soạn bản đồ kiến thức.
+ * Trả về { id, filename, title, summary, truncated, concepts: [{ id, name, summary, importance }] }.
+ */
+export function uploadDocument(file) {
+  const form = new FormData();
+  form.append("file", file);
+  return request("/api/documents", { method: "POST", form, timeoutMs: 300_000 });
+}
+
+/** Trả về { session, message }; message là câu mở đầu ở chế độ nhắn tin, null ở chế độ giọng nói. */
+export function startSession({ documentId, learnerName, mode }) {
+  return request("/api/sessions", {
+    method: "POST",
+    json: { document_id: documentId, learner_name: learnerName || "bạn", mode },
+  });
 }
 
 /** Trả về { message, finished }. */

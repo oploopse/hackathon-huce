@@ -1,25 +1,24 @@
-// Nối các màn: 01 Thiết lập → 03 Chuẩn bị → 04 Phỏng vấn → 05 Đang chấm → 06 Kết quả.
+// Nối các màn theo luồng của giao diện cũ: 01 Thiết lập → 02 Phỏng vấn → Đang chấm → 03 Kết quả.
 
-import { $, ICONS, formatRange, h, img, reducedMotion } from "./dom.js";
+import * as api from "./api.js";
+import { $, ICONS, h, img, reducedMotion, toast } from "./dom.js";
 import { Interview } from "./interview.js";
-import { runPrepare } from "./prepare.js";
 import { renderResult, runGrading } from "./result.js";
-import { initSetup } from "./setup.js";
+import { initSetup, setHealth } from "./setup.js";
 
-const VIEWS = ["setup", "prepare", "interview", "grading", "result"];
-const STEP_OF = { setup: 0, prepare: 1, interview: 1, grading: 2, result: 2 };
+const VIEWS = ["setup", "interview", "grading", "result"];
+const STEP_OF = { setup: 0, interview: 1, grading: 2, result: 2 };
 const TITLES = {
   setup: "Thiết lập",
-  prepare: "Chuẩn bị phỏng vấn",
   interview: "Phỏng vấn",
   grading: "Đang chấm điểm",
   result: "Kết quả",
 };
 
 const flow = {
-  setup: null,
+  health: null,
   document: null,
-  prepare: null,
+  options: null,
   // Điểm các lần thi trước theo tài liệu, để so sánh ở màn kết quả.
   history: new Map(),
 };
@@ -43,45 +42,62 @@ function renderStepper(view) {
   });
 }
 
+function renderHeaderChip(view) {
+  const chip = $("#header-chip");
+  if (view !== "setup" && flow.document) {
+    chip.hidden = false;
+    chip.className = "chip header-chip";
+    chip.replaceChildren(img(ICONS.book, 14), h("span", {}, flow.document.title));
+    chip.title = flow.document.title;
+    return;
+  }
+  const health = flow.health;
+  chip.hidden = !health;
+  if (!health) return;
+  if (health.llm_configured) {
+    chip.className = "chip header-chip is-success";
+    chip.replaceChildren(img(ICONS.dot, 6), h("span", {}, `Gemini · ${health.models.live}`));
+    chip.title = `Não: ${health.models.brain} · Nhắn tin: ${health.models.fast} · Giọng nói: ${health.models.live}`;
+  } else {
+    chip.className = "chip header-chip is-warn";
+    chip.replaceChildren(h("span", {}, "Chưa có GEMINI_API_KEY"));
+    chip.title = "Tạo file .env từ .env.example, điền key rồi khởi động lại server";
+  }
+}
+
 function show(view) {
   for (const name of VIEWS) $(`#view-${name}`).hidden = name !== view;
   $("#progress-strip").hidden = view !== "interview";
   $("#app-footer").hidden = view !== "setup" && view !== "result";
-  const chip = $("#header-chip");
-  chip.hidden = view === "setup" || !flow.setup;
-  if (!chip.hidden) {
-    const title = flow.document ? flow.document.title : flow.setup.filename;
-    chip.replaceChildren(img(ICONS.book, 14), h("span", {}, `${title} · ${formatRange({ from: flow.setup.pageFrom, to: flow.setup.pageTo })}`));
-    chip.title = title;
-  }
+  renderHeaderChip(view);
   renderStepper(view);
   document.title = `${TITLES[view]} · Socratic Exam`;
   window.scrollTo({ top: 0, behavior: reducedMotion() ? "auto" : "instant" });
 }
 
-function startPrepare() {
-  show("prepare");
-  if (flow.prepare) flow.prepare.stop();
-  flow.prepare = runPrepare($("#view-prepare"), {
-    setup: flow.setup,
-    knownDocument: flow.document,
-    onDocument: (doc) => {
-      flow.document = doc;
-      show("prepare");
-    },
-    onReady: ({ session, message }) => {
-      show("interview");
-      interview.start({ setup: flow.setup, document: flow.document, session, message });
-    },
-    onBack: () => show("setup"),
-  });
+/** Phải được gọi trong thao tác bấm nút để trình duyệt cho phát âm thanh của giọng nói. */
+async function startInterview(options) {
+  const { doc, learnerName, mode, bargeIn } = options;
+  const voice = mode === "voice" ? interview.createVoice() : null;
+  try {
+    const result = await api.startSession({ documentId: doc.id, learnerName, mode });
+    flow.document = doc;
+    flow.options = options;
+    show("interview");
+    await interview.start({ session: result.session, message: result.message, voice, bargeIn });
+  } catch (error) {
+    if (voice) voice.stop();
+    interview.dispose();
+    const denied = error && error.name === "NotAllowedError";
+    toast(denied ? "Trình duyệt chưa cho phép dùng micro. Hãy cấp quyền rồi thử lại." : error.message);
+    show("setup");
+  }
 }
 
 function startGrading(summary) {
   show("grading");
   runGrading($("#view-grading"), {
     summary,
-    setup: flow.setup,
     doc: flow.document,
     onBack: () => show("setup"),
     onDone: ({ report, insights, sessionInfo }) => {
@@ -91,11 +107,10 @@ function startGrading(summary) {
         insights,
         sessionInfo,
         summary,
-        setup: flow.setup,
         doc: flow.document,
         previous: attempts.at(-1) || null,
         attempt: attempts.length + 1,
-        onRetry: startPrepare,
+        onRetry: () => startInterview(flow.options),
         onChangeSetup: () => show("setup"),
       });
       attempts.push({
@@ -108,22 +123,25 @@ function startGrading(summary) {
   });
 }
 
-initSetup({
-  onStartInterview: (setup) => {
-    const same = flow.setup
-      && flow.setup.filename === setup.filename
-      && flow.setup.pageFrom === setup.pageFrom
-      && flow.setup.pageTo === setup.pageTo
-      && flow.setup.pageCount === setup.pageCount
-      && flow.setup.words === setup.words;
-    // Cùng file và cùng phạm vi trang thì dùng lại bản đồ kiến thức đã soạn.
-    if (!same) flow.document = null;
-    flow.setup = setup;
-    startPrepare();
-  },
-});
+async function loadHealth() {
+  try {
+    flow.health = await api.health();
+  } catch {
+    flow.health = null;
+    toast("Không kết nối được máy chủ.");
+    return;
+  }
+  setHealth(flow.health);
+  if (!$("#view-setup").hidden) renderHeaderChip("setup");
+}
+
+initSetup({ onStartInterview: startInterview });
 show("setup");
+loadHealth();
 
 window.addEventListener("beforeunload", (event) => {
   if (interview.active) event.preventDefault();
+});
+window.addEventListener("pagehide", () => {
+  if (interview.active) interview.dispose();
 });

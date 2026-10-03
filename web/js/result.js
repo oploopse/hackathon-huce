@@ -1,8 +1,10 @@
 // Màn 05 · Đang chấm điểm và 06 · Kết quả.
 
 import * as api from "./api.js";
-import { ICONS, formatDuration, formatRange, h, img, maskIcon, notice, pillButton, truncate } from "./dom.js";
+import { ICONS, formatDuration, h, img, maskIcon, notice, pillButton, truncate } from "./dom.js";
 import { isFollowUp } from "./interview.js";
+
+const BLOOM = ["—", "Nhớ", "Hiểu", "Vận dụng", "Phân tích", "Đánh giá", "Sáng tạo"];
 
 const LEVEL = {
   strong: { label: "Vững", chip: "is-success", headline: "Nắm vững phần này" },
@@ -19,13 +21,13 @@ function tick() {
 }
 
 /** Màn 05: gọi backend chấm và lấy dữ liệu cho màn kết quả. */
-export function runGrading(root, { summary, setup, doc, onDone, onBack }) {
+export function runGrading(root, { summary, doc, onDone, onBack }) {
   let failed = null;
 
   function render() {
     const steps = [
-      h("li", {}, tick(), `Chép lại ${summary.answered} câu trả lời (${formatDuration(summary.usedSeconds)})`),
-      h("li", {}, tick(), `Đã chấm từng câu theo ${doc.concepts.length} khái niệm của tài liệu`),
+      h("li", {}, tick(), `Ghi lại ${summary.answered} lượt trả lời (${formatDuration(summary.usedSeconds)})`),
+      h("li", {}, tick(), `Đã chấm từng lượt theo ${doc.concepts.length} chủ đề của tài liệu`),
       failed
         ? h("li", { class: "is-pending" }, h("span", { class: "pending-dot" }), "Viết nhận xét và kế hoạch ôn tập")
         : h("li", { class: "is-active" }, img(ICONS.stepActive, 22), "Viết nhận xét và kế hoạch ôn tập"),
@@ -37,7 +39,7 @@ export function runGrading(root, { summary, setup, doc, onDone, onBack }) {
         h("h1", {}, failed ? "Chưa chấm xong buổi phỏng vấn" : "Đang chấm buổi phỏng vấn"),
         h("p", { class: "card-desc" }, failed
           ? "Câu trả lời của bạn vẫn được lưu. Bấm Thử lại để chấm tiếp."
-          : `Giám khảo đang xem lại ${summary.answered} câu trả lời và đối chiếu với ${formatRange({ from: setup.pageFrom, to: setup.pageTo })}. Việc này thường mất 10–20 giây.`)),
+          : `Giám khảo đang xem lại ${summary.answered} lượt trả lời và đối chiếu với "${doc.title}". Việc này thường mất 10–20 giây.`)),
       h("div", { class: "progress-track", style: "--value: 80%" }, h("span")),
       h("ul", { class: "checklist" }, steps),
       failed ? h("div", { class: "flow-actions-col" },
@@ -46,7 +48,7 @@ export function runGrading(root, { summary, setup, doc, onDone, onBack }) {
           pillButton("Thử lại", { icon: ICONS.replay, onclick: run }),
           pillButton("Về trang thiết lập", { onclick: onBack }))) : null,
       h("hr", { class: "divider" }),
-      h("p", { class: "label-caps" }, "Chấm theo từng khái niệm"),
+      h("p", { class: "label-caps" }, "Chấm theo từng chủ đề"),
       h("div", { class: "concept-chips" }, doc.concepts.map((c) => h("span", { class: "concept-chip" }, c.name))),
     ));
   }
@@ -211,14 +213,65 @@ function criticalGap(report) {
       c.advice ? h("span", {}, img(ICONS.check12, 12), c.advice) : null) : null);
 }
 
+function levelChip(level) {
+  const info = LEVEL[level] || LEVEL.not_assessed;
+  return h("span", { class: `chip chip-small ${info.chip || "chip-white"}` }, info.label);
+}
+
+function bulletList(items) {
+  return h("ul", { class: "bullets" }, items.map((item) => h("li", {}, item)));
+}
+
+/** Nhận xét từng chủ đề cho người học: điểm mạnh, chỗ cần cải thiện, lời khuyên, trang cần xem lại. */
+function feedbackCard(report) {
+  if (!report.concepts.length) return null;
+  return h("section", { class: "result-card" },
+    h("div", { class: "card-head" }, h("h2", {}, "Nhận xét theo chủ đề"), h("p", {}, "Điểm mạnh và chỗ cần ôn của từng chủ đề")),
+    h("div", { class: "feedback-grid" }, report.concepts.map((c) =>
+      h("article", { class: "feedback-item" },
+        h("div", { class: "log-head" }, h("strong", {}, c.name), h("span", { class: "spacer" }), levelChip(c.level)),
+        c.level !== "not_assessed" ? h("div", { class: "thin-track progress-bar", style: `--value: ${c.score}%` }, h("span")) : null,
+        c.strengths.length ? h("div", {}, h("p", { class: "label-caps" }, "Điểm mạnh"), bulletList(c.strengths)) : null,
+        c.gaps.length ? h("div", {}, h("p", { class: "label-caps" }, "Cần cải thiện"), bulletList(c.gaps)) : null,
+        c.advice ? h("p", {}, c.advice) : null,
+        c.review_pages.length ? h("p", { class: "pages" }, img(ICONS.book, 14), `Xem lại trang ${c.review_pages.join(", ")}`) : null))));
+}
+
+/** Phần dành cho giáo viên, như tab "Cho giáo viên" của báo cáo trong giao diện cũ. */
+function teacherSection(report) {
+  const rows = report.concepts.map((c) =>
+    h("tr", {},
+      h("td", {}, c.name),
+      h("td", {}, levelChip(c.level)),
+      h("td", {}, c.level === "not_assessed" ? "—" : String(c.score)),
+      h("td", {}, BLOOM[c.max_bloom] || "—"),
+      h("td", {}, String(c.hints)),
+      h("td", {}, c.misconceptions.length ? c.misconceptions.join("; ") : "—"),
+      h("td", {}, c.evidence.length ? c.evidence.map((q) => h("p", { class: "quote" }, `“${q}”`)) : "—")));
+  return h("div", { class: "teacher-section" },
+    h("section", { class: "result-card" },
+      h("div", { class: "card-head" }, h("h2", {}, "Đánh giá khách quan")),
+      h("p", {}, report.summary_for_teacher)),
+    report.teacher_notes.length
+      ? h("section", { class: "result-card" }, h("div", { class: "card-head" }, h("h2", {}, "Quan sát đáng chú ý")), bulletList(report.teacher_notes))
+      : null,
+    h("section", { class: "result-card" },
+      h("div", { class: "card-head" }, h("h2", {}, "Chi tiết theo chủ đề")),
+      h("div", { class: "table-wrap" },
+        h("table", { class: "teacher-table" },
+          h("thead", {}, h("tr", {}, ["Chủ đề", "Mức", "Điểm", "Bloom cao nhất", "Gợi ý", "Hiểu lầm", "Trích dẫn"].map((t) => h("th", {}, t)))),
+          h("tbody", {}, rows)))));
+}
+
 /**
  * Màn 06. previous = { score, concepts: { [concept_id]: score } } của lần thi trước với cùng tài liệu.
  */
-export function renderResult(root, { report, insights, sessionInfo, setup, doc, summary, previous, attempt, onRetry, onChangeSetup }) {
+export function renderResult(root, { report, insights, sessionInfo, doc, summary, previous, attempt, onRetry, onChangeSetup }) {
   const level = LEVEL[report.overall_level] || LEVEL.not_assessed;
   const assessed = report.concepts.filter((c) => c.level !== "not_assessed");
   const misconceptions = assessed.some((c) => c.misconceptions.length);
-  const range = formatRange({ from: setup.pageFrom, to: setup.pageTo });
+  const learnerName = sessionInfo?.learner_name || summary.session.learner_name;
+  const modeLabel = summary.session.mode === "voice" ? "Phỏng vấn giọng nói" : "Phỏng vấn nhắn tin";
   const diff = previous && report.overall_level !== "not_assessed" ? report.overall_score - previous.score : null;
   const finishedAt = new Date(report.generated_at).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
 
@@ -234,9 +287,9 @@ export function renderResult(root, { report, insights, sessionInfo, setup, doc, 
         h("h1", {}, level.headline),
         h("p", {}, report.summary_for_learner),
         h("div", { class: "chip-row" },
-          h("span", { class: "chip" }, img(ICONS.list14, 14), `${summary.answered} câu`),
+          h("span", { class: "chip" }, img(ICONS.list14, 14), `${summary.answered} lượt trả lời`),
           h("span", { class: "chip" }, img(ICONS.clock14, 14), formatDuration(summary.usedSeconds)),
-          h("span", { class: "chip" }, img(ICONS.book, 14), range)))),
+          h("span", { class: "chip" }, img(ICONS.headphones14, 14), `${learnerName} · ${modeLabel}`)))),
     criticalGap(report));
 
   const tiles = h("div", { class: "axis-tiles" }, assessed.map((c) => {
@@ -251,20 +304,44 @@ export function renderResult(root, { report, insights, sessionInfo, setup, doc, 
   const mapCard = h("section", { class: "result-card" },
     h("div", { class: "card-head" },
       h("h2", {}, "Bản đồ năng lực"),
-      h("p", {}, previous ? "So với lần thi trước, cùng phạm vi trang" : "Điểm theo từng khái niệm đã được hỏi")),
+      h("p", {}, previous ? "So với lần thi trước với cùng tài liệu" : "Điểm theo từng chủ đề đã được hỏi")),
     previous ? h("div", { class: "legend" },
       h("span", {}, h("i", { class: "is-dashed" }), `Lần trước · ${previous.score} điểm`),
       h("span", { class: "is-current" }, h("i"), `Lần này · ${report.overall_score} điểm`)) : null,
     assessed.length >= 3 ? radar(assessed, previous?.concepts) : null,
-    assessed.length ? tiles : h("p", { class: "muted" }, "Chưa có khái niệm nào đủ dữ liệu để chấm."),
+    assessed.length ? tiles : h("p", { class: "muted" }, "Chưa có chủ đề nào đủ dữ liệu để chấm."),
     report.study_plan.length ? h("div", { class: "card-head" }, h("h2", {}, "Kế hoạch ôn tập")) : null,
     report.study_plan.length ? h("ol", { class: "plan" }, report.study_plan.map((step) => h("li", {}, step))) : null);
 
   const logCard = h("section", { class: "result-card" },
     h("div", { class: "card-head" },
       h("h2", {}, "Nhật ký phỏng vấn"),
-      h("p", {}, `${summary.answered} câu · nhận xét của giám khảo cho từng câu`)),
+      h("p", {}, "Nhận xét của giám khảo cho từng lượt trả lời")),
     logItems(insights));
+
+  const learnerPanel = h("div", { class: "tab-panel", role: "tabpanel" },
+    h("div", { class: "result-columns" }, mapCard, logCard),
+    feedbackCard(report));
+  const teacherPanel = h("div", { class: "tab-panel", role: "tabpanel", hidden: true }, teacherSection(report));
+  const tabs = [["learner", "Cho người học", learnerPanel], ["teacher", "Cho giáo viên", teacherPanel]].map(([key, label, panel]) =>
+    h("button", {
+      type: "button",
+      class: "preset tab",
+      role: "tab",
+      "aria-pressed": String(key === "learner"),
+      "aria-selected": String(key === "learner"),
+      onclick: () => {
+        for (const button of tabs) {
+          const active = button.dataset.key === key;
+          button.setAttribute("aria-pressed", String(active));
+          button.setAttribute("aria-selected", String(active));
+        }
+        learnerPanel.hidden = key !== "learner";
+        teacherPanel.hidden = key !== "teacher";
+        panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      },
+      "data-key": key,
+    }, label));
 
   const transcript = h("section", { class: "transcript-card", hidden: true },
     h("h2", {}, "Toàn bộ bản ghi"),
@@ -283,13 +360,15 @@ export function renderResult(root, { report, insights, sessionInfo, setup, doc, 
 
   root.replaceChildren(
     h("div", { class: "result-top" },
-      h("span", { class: "chip is-success" }, img(ICONS.check, 14), `Đã hoàn thành · ${doc.title} (${range})`),
+      h("span", { class: "chip is-success" }, img(ICONS.check, 14), `Đã hoàn thành · ${doc.title} (${doc.filename})`),
       h("span", {}, attempt > 1 ? `Lần thi thứ ${attempt} · xong lúc ${finishedAt}` : `Xong lúc ${finishedAt}`)),
     overview,
-    h("div", { class: "result-columns" }, mapCard, logCard),
+    h("div", { class: "presets result-tabs", role: "tablist", "aria-label": "Góc nhìn của báo cáo" }, tabs),
+    learnerPanel,
+    teacherPanel,
     h("div", { class: "action-bar" },
       h("button", { type: "button", class: "btn-primary btn-big", onclick: onRetry }, img(ICONS.target, 18), h("span", {}, "Thi lại")),
-      pillButton("Đổi tài liệu hoặc phạm vi", { icon: ICONS.sliders, iconSize: 18, className: "btn-pill btn-outline-big", onclick: onChangeSetup }),
+      pillButton("Phỏng vấn buổi mới", { icon: ICONS.sliders, iconSize: 18, className: "btn-pill btn-outline-big", onclick: onChangeSetup }),
       h("span", { class: "spacer" }),
       transcriptButton),
     transcript,

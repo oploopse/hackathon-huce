@@ -70,18 +70,34 @@
 
 .document-status { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
 .document-status:empty { display: none; }
+.document-status .chip { white-space: normal; }
+.dropzone.is-busy { pointer-events: none; opacity: 0.6; }
 
-/* Phạm vi trang */
+/* Tài liệu đã tải và các chủ đề */
 
-.range-panel {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px 24px;
-  padding: 16px;
-}
-.range-inputs { display: flex; align-items: flex-start; gap: 12px; }
+.doc-list-wrap { display: flex; flex-direction: column; gap: 8px; }
+.doc-list { display: flex; flex-direction: column; gap: 8px; max-height: 280px; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.doc-item { width: 100%; text-align: left; transition: border-color 0.15s, background-color 0.15s; }
+.doc-item:hover { background: var(--subtle); }
+.doc-item.is-active { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
+
+.doc-detail { display: flex; flex-direction: column; gap: 10px; padding: 20px; }
+.doc-detail-title { margin: 0; font-size: 17px; font-weight: 600; line-height: 1.4; }
+.doc-detail-summary { color: var(--muted); font-size: 14px; }
+.concept-list { display: flex; flex-direction: column; gap: 10px; margin: 6px 0 0; padding: 0; list-style: none; }
+.concept-list li { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border-radius: 14px; background: var(--subtle); }
+.concept-row-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.concept-row-head strong { font-size: 14px; font-weight: 600; }
+.concept-list p { color: var(--muted); font-size: 13px; }
+
+/* Tên và hình thức */
+
 .text-field { display: flex; flex-direction: column; gap: 6px; width: 120px; }
+.text-field.is-wide, .text-field.is-wide input { width: 100%; }
+.mode-panel { display: flex; flex-direction: column; gap: 12px; padding: 16px; }
+.mode-option { padding: 8px 20px; font-family: var(--font-sans); font-weight: 600; }
+.check { display: flex; align-items: flex-start; gap: 8px; color: var(--muted); font-size: 13px; cursor: pointer; }
+.check input { margin: 3px 0 0; accent-color: var(--primary); }
 .text-field label { color: var(--muted); font-size: 12px; font-weight: 500; }
 .text-field input {
   width: 120px;
@@ -99,56 +115,6 @@
 .text-field input::placeholder { color: var(--faint); }
 .text-field.is-invalid label { color: var(--danger); }
 .text-field.is-invalid input { background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--danger); }
-.text-field-error { width: 140px; color: var(--danger); font-size: 12px; }
-.range-dash {
-  display: flex;
-  align-items: center;
-  height: 44px;
-  margin-top: 24px;
-  color: var(--muted);
-  font-size: 16px;
-}
-
-.coverage { display: flex; flex-direction: column; gap: 10px; width: 220px; padding-bottom: 6px; }
-.coverage-text { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 12px; }
-.coverage-text strong { color: var(--ink); font-weight: 600; }
-.coverage-bar {
-  position: relative;
-  height: 8px;
-  overflow: hidden;
-  border-radius: var(--radius-full);
-  background: var(--primary-soft);
-}
-.coverage-bar span {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: var(--start, 0%);
-  width: var(--size, 0%);
-  border-radius: var(--radius-full);
-  background: var(--primary);
-}
-
-/* Số câu hỏi và thời gian */
-
-.slider-panel { display: flex; flex-direction: column; gap: 12px; padding: 16px 16px 14px; }
-.slider-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px 16px;
-  min-height: 32px;
-}
-.slider-value { display: flex; align-items: baseline; gap: 8px; }
-.slider-value output {
-  color: var(--primary);
-  font-family: var(--font-mono);
-  font-size: 22px;
-  font-weight: 700;
-  line-height: 1.2;
-}
-.slider-value span { color: var(--muted); font-size: 13px; }
 
 .presets { display: flex; flex-wrap: wrap; gap: 6px; }
 .preset {
@@ -166,24 +132,6 @@
 .preset:hover { background: color-mix(in srgb, var(--primary) 14%, var(--primary-soft)); }
 .preset[aria-pressed="true"] { background: var(--primary); color: #fff; }
 
-.slider-scale {
-  position: relative;
-  height: 17px;
-  color: var(--faint);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.5;
-}
-.slider-scale span { position: absolute; top: 0; transform: translateX(-50%); }
-.slider-scale span.is-current { color: var(--primary); font-weight: 700; }
-.slider-ends {
-  display: flex;
-  justify-content: space-between;
-  color: var(--faint);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.5;
-}
 .panel-note { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
 
 /* Kiểm tra micro */
@@ -234,8 +182,6 @@
   .field-head { flex-wrap: wrap; }
   .field-hint { text-align: left; }
   .dropzone { padding: 24px 16px; }
-  .range-panel { flex-direction: column; align-items: stretch; }
-  .coverage { width: 100%; }
   .mic-panel { flex-wrap: wrap; padding: 16px; gap: 16px; }
   .mic-panel .mic-body { flex-basis: calc(100% - 72px); }
   .mic-panel > .btn-pill { margin-left: 72px; }

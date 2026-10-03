@@ -27,7 +27,7 @@ Mở `.env`, điền `GEMINI_API_KEY` (lấy miễn phí tại [Google AI Studio
 
 Lệnh này đọc `.env`, tắt server cũ của chính dự án nếu cổng 8000 đang bị bản đó chiếm, rồi mở http://127.0.0.1:8000. Trình duyệt chỉ cho dùng micro trên `localhost` hoặc HTTPS. Nếu model đang chọn báo quá tải (`503`), ứng dụng tự chuyển sang model dự phòng.
 
-Giao diện mới nằm ở `/` (`web/index.html`, mã trong `web/js/`); giao diện cũ vẫn mở được ở `/legacy.html`. Hợp đồng API giữa giao diện và backend được mô tả trong `web/API_CONTRACT.md`.
+Giao diện mới nằm ở `/` (`web/index.html`, mã trong `web/js/`) và chạy cùng luồng với giao diện cũ: tải tài liệu, chọn Giọng nói (Gemini Live real-time) hoặc Nhắn tin, Bảng giáo viên, báo cáo cho người học và giáo viên. Giao diện cũ vẫn mở được ở `/legacy.html`.
 
 Chạy test (không cần API key, dùng LLM và phiên Gemini Live giả):
 

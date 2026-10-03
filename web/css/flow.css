@@ -489,3 +489,85 @@
   .result-card { padding: 20px; }
 }
 .mode-switch { align-self: center; }
+
+/* Phỏng vấn theo luồng giọng nói real-time / nhắn tin */
+
+.strip-right { gap: 8px; }
+.btn-pill.is-on { border-color: var(--primary); background: var(--primary-soft); color: var(--primary); }
+.header-chip.is-success { background: var(--success-bg); color: var(--success); }
+
+.interview-main.with-teacher { width: min(1180px, calc(100% - 32px)); }
+.interview-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-items: start; }
+.interview-main.with-teacher .interview-layout { grid-template-columns: minmax(0, 1fr) 400px; }
+.interview-col { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+
+.voice-card { gap: 18px; }
+.voice-wave { justify-content: center; height: 40px; }
+.voice-wave i { transition: height 0.07s linear; }
+.voice-error:empty { display: none; }
+
+.chat-card { gap: 14px; }
+.chat { display: flex; flex-direction: column; gap: 10px; min-height: 120px; max-height: 52vh; overflow-y: auto; scroll-behavior: smooth; }
+.chat .turn { max-width: 85%; }
+.chat .turn:not(.is-learner) { align-self: flex-start; }
+.turn-text { color: var(--ink); font-size: 15px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.turn.is-interrupted .turn-text::after { content: " · bị ngắt lời"; color: var(--faint); font-size: 12px; }
+.typing { display: inline-flex; align-self: flex-start; gap: 4px; padding: 12px 14px; border-radius: 14px; background: var(--subtle); }
+.typing span { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: typing 1.2s infinite; }
+.typing span:nth-child(2) { animation-delay: 0.2s; }
+.typing span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes typing { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
+.composer { display: flex; align-items: flex-end; gap: 10px; }
+.composer .answer-input { min-height: 72px; }
+
+.teacher-panel { position: sticky; top: 72px; gap: 14px; max-height: calc(100vh - 96px); overflow-y: auto; }
+.teacher-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.teacher-head h2 { font-size: 16px; font-weight: 600; }
+.progress-list, .eval-list { display: flex; flex-direction: column; gap: 10px; }
+.progress-item { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid transparent; border-radius: 14px; background: var(--subtle); }
+.progress-item.is-current { border-color: var(--primary); background: var(--surface); }
+.progress-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.progress-top strong { font-size: 13px; font-weight: 600; }
+.progress-bar { height: 6px; }
+.progress-meta { color: var(--muted); font-size: 12px; }
+.progress-warn { color: var(--danger); font-size: 12px; }
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 50;
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 12px 18px;
+  border-radius: 14px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 14px;
+  box-shadow: 0 6px 24px rgba(15, 31, 36, 0.2);
+  transform: translateX(-50%);
+}
+.toast.is-warn { background: var(--warn); }
+
+/* Kết quả: hai góc nhìn người học và giáo viên */
+
+.result-tabs { align-self: flex-start; }
+.result-tabs .tab { padding: 8px 20px; font-family: var(--font-sans); font-weight: 600; }
+.tab-panel { display: flex; flex-direction: column; gap: 20px; }
+.feedback-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.feedback-item { display: flex; flex-direction: column; gap: 10px; padding: 16px; border-radius: 16px; background: var(--subtle); font-size: 13px; }
+.feedback-item > p { color: var(--body); }
+.bullets { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 0; padding-left: 18px; color: var(--body); font-size: 13px; }
+.pages { display: flex; align-items: center; gap: 6px; color: var(--primary); font-size: 12px; font-weight: 600; }
+.teacher-section { display: flex; flex-direction: column; gap: 20px; }
+.teacher-section .result-card > p { color: var(--body); }
+.table-wrap { overflow-x: auto; }
+.teacher-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.teacher-table th { padding: 10px 12px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; font-weight: 600; text-align: left; white-space: nowrap; }
+.teacher-table td { padding: 12px; border-bottom: 1px solid var(--line); color: var(--body); vertical-align: top; }
+.teacher-table .quote { color: var(--muted); font-style: italic; }
+.teacher-table .quote + .quote { margin-top: 6px; }
+
+@media (max-width: 1000px) {
+  .interview-main.with-teacher .interview-layout { grid-template-columns: minmax(0, 1fr); }
+  .teacher-panel { position: static; max-height: none; }
+}
