@@ -1,10 +1,8 @@
-// Màn 03 · Chuẩn bị phỏng vấn: gửi chữ cho giám khảo, chờ soạn câu hỏi rồi đếm ngược 3 giây.
+// Màn 03 · Chuẩn bị phỏng vấn: gửi chữ cho giám khảo, chờ soạn câu hỏi, người học tự bấm Bắt đầu.
 
 import * as api from "./api.js";
 import { ICONS, formatRange, h, img, maskIcon, notice, numberVi, pillButton, roundWords } from "./dom.js";
 
-const COUNTDOWN_S = 3;
-const RING = 2 * Math.PI * 25;
 
 function tick() {
   return h("span", { class: "tick" }, img(ICONS.checkWhite12, 12));
@@ -21,7 +19,7 @@ function stepItem(status, text) {
  * onReady({ document, session, message }) khi đếm ngược xong; onBack() để quay lại thiết lập.
  */
 export function runPrepare(root, { setup, knownDocument = null, onDocument, onReady, onBack }) {
-  const state = { document: knownDocument, session: null, message: "", error: null, countdown: null };
+  const state = { document: knownDocument, session: null, message: "", error: null };
   let timer = 0;
   let cancelled = false;
   const range = { from: setup.pageFrom, to: setup.pageTo };
@@ -79,39 +77,11 @@ export function runPrepare(root, { setup, knownDocument = null, onDocument, onRe
   }
 
   function countdownBox() {
-    const left = state.countdown ?? COUNTDOWN_S;
-    const offset = RING * (1 - left / COUNTDOWN_S);
     return h("div", { class: "countdown" },
-      h("div", { class: "countdown-ring", "aria-hidden": "true" },
-        svgRing(offset),
-        h("span", {}, left)),
       h("div", { class: "countdown-text" },
-        h("strong", { role: "timer" }, `Phỏng vấn bắt đầu sau ${left} giây`),
+        h("strong", {}, "Giám khảo đã sẵn sàng"),
         h("span", {}, `${setup.questionCount} câu · ${setup.durationMinutes} phút cho cả buổi. Đồng hồ tạm dừng khi giám khảo suy nghĩ.`)),
-      pillButton("Bắt đầu ngay", { icon: ICONS.play, onclick: begin }));
-  }
-
-  function svgRing(offset) {
-    const ns = "http://www.w3.org/2000/svg";
-    const svg = document.createElementNS(ns, "svg");
-    svg.setAttribute("width", "56");
-    svg.setAttribute("height", "56");
-    svg.setAttribute("viewBox", "0 0 56 56");
-    const track = document.createElementNS(ns, "circle");
-    const bar = document.createElementNS(ns, "circle");
-    for (const [el, color] of [[track, "#ffffff"], [bar, "var(--primary)"]]) {
-      el.setAttribute("cx", "28");
-      el.setAttribute("cy", "28");
-      el.setAttribute("r", "25");
-      el.setAttribute("fill", "none");
-      el.setAttribute("stroke-width", "4");
-      el.setAttribute("stroke", color);
-    }
-    bar.setAttribute("stroke-linecap", "round");
-    bar.setAttribute("stroke-dasharray", String(RING));
-    bar.setAttribute("stroke-dashoffset", String(offset));
-    svg.append(track, bar);
-    return svg;
+      pillButton("Bắt đầu", { icon: ICONS.play, onclick: begin, className: "btn-primary" }));
   }
 
   function stop() {
@@ -123,16 +93,6 @@ export function runPrepare(root, { setup, knownDocument = null, onDocument, onRe
     if (cancelled) return;
     stop();
     onReady({ document: state.document, session: state.session, message: state.message });
-  }
-
-  function startCountdown() {
-    state.countdown = COUNTDOWN_S;
-    render();
-    timer = setInterval(() => {
-      state.countdown -= 1;
-      if (state.countdown <= 0) begin();
-      else render();
-    }, 1000);
   }
 
   async function run() {
@@ -149,7 +109,7 @@ export function runPrepare(root, { setup, knownDocument = null, onDocument, onRe
       if (cancelled) return;
       state.session = result.session;
       state.message = result.message || "";
-      startCountdown();
+      render();
     } catch (error) {
       if (cancelled) return;
       state.error = error.offline

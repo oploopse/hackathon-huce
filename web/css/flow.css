@@ -116,6 +116,11 @@
 .countdown-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
 .countdown-text strong { font-size: 15px; font-weight: 600; }
 .countdown-text span { color: var(--muted); font-size: 13px; }
+.countdown .btn-primary { width: auto; flex: none; padding: 12px 28px; }
+@media (max-width: 560px) {
+  .countdown { flex-wrap: wrap; }
+  .countdown .btn-primary { width: 100%; }
+}
 
 .concept-chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .concept-chip {
@@ -139,7 +144,7 @@
   top: 0;
   z-index: 5;
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: 1fr auto;
   align-items: center;
   gap: 12px;
   padding: 14px 40px;
@@ -475,8 +480,6 @@
 @media (max-width: 720px) {
   .flow-card, .card-lg { padding: 24px; }
   .progress-strip { grid-template-columns: 1fr auto; padding: 12px 16px; }
-  .progress-strip .strip-clock { grid-column: 1; grid-row: 2; }
-  .progress-strip .strip-right { grid-row: 1 / span 2; grid-column: 2; }
   .segments span { width: 20px; }
   .question-text { font-size: 19px; }
   .answer-card { padding: 20px; }
@@ -485,3 +488,4 @@
   .axis-tiles { grid-template-columns: minmax(0, 1fr); }
   .result-card { padding: 20px; }
 }
+.mode-switch { align-self: center; }
