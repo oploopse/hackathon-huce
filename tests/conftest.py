@@ -20,10 +20,8 @@ async def fake_generate_json(model, system, prompt, schema, thinking_level=None)
     if schema is ReportNarrative:
         return ReportNarrative(
             summary_for_learner="Bạn làm tốt.",
-            summary_for_teacher="Hiểu thật.",
             concept_feedback=[ConceptFeedback(concept_id="c1", strengths=["Rõ ràng"], gaps=[], advice="Ôn thêm")],
             study_plan=["Ôn chương 2"],
-            teacher_notes=[],
         )
     raise AssertionError(f"Schema không mong đợi: {schema}")
 

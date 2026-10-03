@@ -15,8 +15,8 @@
   <main class="container">
     <section id="view-setup" class="view">
       <div class="intro">
-        <h1>Phỏng vấn để biết người học có thực sự hiểu bài</h1>
-        <p>Tải tài liệu lên, AI sẽ soạn câu hỏi, trò chuyện với người học, hỏi sâu khi cần và đánh giá ngầm trong suốt buổi.</p>
+        <h1>Ôn tập bằng phỏng vấn AI</h1>
+        <p>Tải tài liệu lên, trả lời các câu hỏi bằng giọng nói hoặc tin nhắn, rồi xem phần mình đã nắm và cần ôn thêm.</p>
       </div>
 
       <div class="setup-grid">
@@ -38,7 +38,7 @@
           <div id="doc-detail" hidden>
             <h3 id="doc-title" class="doc-title"></h3>
             <p id="doc-summary" class="muted"></p>
-            <p id="doc-truncated" class="notice" hidden>Tài liệu dài nên chỉ phần đầu được dùng để soạn câu hỏi.</p>
+            <p id="doc-truncated" class="notice" hidden>Tài liệu dài nên hệ thống lấy mẫu các phần xuyên suốt tài liệu để soạn câu hỏi; một số nội dung có thể chưa được hỏi.</p>
             <div class="list-head">Các chủ đề sẽ hỏi</div>
             <ul id="concept-list" class="concept-list"></ul>
 
@@ -58,6 +58,10 @@
                 <input type="checkbox" id="barge-in" checked>
                 <span>Cho phép ngắt lời AI. Nên đeo tai nghe, nếu không AI có thể nghe thấy chính giọng của nó.</span>
               </label>
+              <label class="check" id="push-to-talk-row">
+                <input type="checkbox" id="push-to-talk" checked>
+                <span>Môi trường ồn: chỉ bật micro khi giữ nút “Giữ để nói”.</span>
+              </label>
               <button type="submit" class="btn primary wide" id="start-btn">Bắt đầu phỏng vấn</button>
             </form>
           </div>
@@ -74,7 +78,6 @@
               <div class="muted small"><span id="timer">00:00</span> / <span id="time-limit">15:00</span></div>
             </div>
             <div class="stage-actions">
-              <button class="btn ghost" id="toggle-teacher" type="button" aria-pressed="false">Bảng giáo viên</button>
               <button class="btn danger" id="end-btn" type="button">Kết thúc</button>
             </div>
           </div>
@@ -87,6 +90,7 @@
             <div class="orb-label" id="orb-label">Đang kết nối…</div>
             <div class="voice-controls">
               <button class="btn ghost" id="mute-btn" type="button" aria-pressed="false">Tắt mic</button>
+              <button class="btn primary talk-btn" id="talk-btn" type="button" aria-pressed="false" hidden>Giữ để nói</button>
               <label class="check small"><input type="checkbox" id="show-captions" checked><span>Hiện phụ đề</span></label>
             </div>
           </div>
@@ -104,12 +108,6 @@
           </form>
         </div>
 
-        <aside class="card teacher" id="teacher-panel" hidden>
-          <div class="teacher-head"><h3>Đánh giá ngầm</h3><span class="tag">Chỉ giáo viên</span></div>
-          <div id="progress-list" class="progress-list"></div>
-          <h4>Lượt chấm gần nhất</h4>
-          <div id="eval-list" class="eval-list"></div>
-        </aside>
       </div>
     </section>
 
@@ -123,20 +121,16 @@
       <div id="report" hidden>
         <div class="card report-hero">
           <div class="score-ring" id="score-ring">
-            <span id="score-value">0</span><small>/100</small>
+            <span id="score-value">—</span><small id="score-denominator" hidden>/100</small>
           </div>
           <div class="hero-text">
             <span class="level-badge" id="overall-level"></span>
             <h2 id="report-title"></h2>
             <p class="muted" id="report-meta"></p>
+            <p class="muted" id="report-coverage"></p>
           </div>
         </div>
-        <div class="tabs" role="tablist">
-          <button class="tab active" data-tab="learner" role="tab" aria-selected="true">Cho người học</button>
-          <button class="tab" data-tab="teacher" role="tab" aria-selected="false">Cho giáo viên</button>
-        </div>
-        <div id="tab-learner" class="tab-panel" role="tabpanel"></div>
-        <div id="tab-teacher" class="tab-panel" role="tabpanel" hidden></div>
+        <div id="report-content" class="report-sections"></div>
         <div class="report-actions"><button class="btn ghost" id="restart-btn" type="button">Phỏng vấn buổi mới</button></div>
       </div>
     </section>

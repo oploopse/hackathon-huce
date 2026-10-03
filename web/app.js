@@ -2,16 +2,6 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 
 const LEVELS = { strong: "Vững", good: "Khá", basic: "Cơ bản", gap: "Cần ôn lại", not_assessed: "Chưa đánh giá" };
-const STATUS = {
-  pending: "Chưa hỏi", in_progress: "Đang hỏi", mastered: "Hiểu tốt",
-  partial: "Hiểu một phần", gap: "Chưa nắm", unassessed: "Chưa đủ dữ liệu",
-};
-const ACTIONS = {
-  ask_main: "Hỏi câu chính", probe_deeper: "Hỏi sâu", challenge: "Phản biện", hint: "Gợi ý",
-  clarify: "Diễn đạt lại", encourage: "Động viên", redirect: "Kéo về câu hỏi",
-  next_concept: "Chuyển chủ đề", wrap_up: "Kết thúc",
-};
-const BLOOM = ["—", "Nhớ", "Hiểu", "Vận dụng", "Phân tích", "Đánh giá", "Sáng tạo"];
 const IMPORTANCE = { 3: "Cốt lõi", 2: "Quan trọng", 1: "Bổ trợ" };
 const SPEAKING_LEVEL = 0.04;
 
@@ -23,7 +13,6 @@ const state = {
   voice: null,
   startedAt: 0,
   timer: null,
-  insightsTimer: null,
   finished: false,
   sending: false,
   bubbles: { learner: null, interviewer: null },
@@ -92,10 +81,6 @@ function toast(message, kind = "error") {
 function formatClock(seconds) {
   const s = Math.max(0, Math.floor(seconds));
   return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
-}
-
-function truncate(text, max) {
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
 function showView(name) {
@@ -222,6 +207,7 @@ function setupModeSwitch() {
         other.setAttribute("aria-checked", String(other === button));
       }
       $("#barge-in-row").hidden = state.mode !== "voice";
+      $("#push-to-talk-row").hidden = state.mode !== "voice";
     });
   }
 }
@@ -278,9 +264,7 @@ function startTimers() {
 
 function stopTimers() {
   clearInterval(state.timer);
-  clearInterval(state.insightsTimer);
   state.timer = null;
-  state.insightsTimer = null;
 }
 
 function setupInterviewView() {
@@ -298,7 +282,6 @@ function setupInterviewView() {
   $("#chat-input").value = "";
   state.bubbles = { learner: null, interviewer: null };
   startTimers();
-  if (!$("#teacher-panel").hidden) refreshInsights();
 }
 
 function markFinished() {
@@ -306,7 +289,6 @@ function markFinished() {
   $("#chat-form").hidden = true;
   $("#finished-banner").hidden = false;
   clearInterval(state.timer);
-  refreshInsights();
 }
 
 async function sendMessage(event) {
@@ -337,7 +319,6 @@ async function sendMessage(event) {
     state.sending = false;
     $("#send-btn").disabled = false;
     input.focus();
-    if (!$("#teacher-panel").hidden) refreshInsights();
   }
 }
 
@@ -347,6 +328,8 @@ class VoiceClient {
   constructor(handlers) {
     this.handlers = handlers;
     this.allowBargeIn = true;
+    this.pushToTalk = false;
+    this.talking = false;
     this.muted = false;
     this.playing = false;
     this.ended = false;
@@ -359,8 +342,9 @@ class VoiceClient {
     this.playCtx = new AudioContext({ sampleRate: 24000 });
   }
 
-  async start(sessionId, allowBargeIn) {
+  async start(sessionId, allowBargeIn, pushToTalk) {
     this.allowBargeIn = allowBargeIn;
+    this.pushToTalk = pushToTalk;
     await Promise.all([
       this.captureCtx.audioWorklet.addModule("/capture-worklet.js"),
       this.playCtx.audioWorklet.addModule("/playback-worklet.js"),
@@ -382,6 +366,7 @@ class VoiceClient {
         this.handlers.onLevel(this.isMicOpen() ? event.data.value : 0);
       }
     };
+    this.syncMic();
 
     this.player = new AudioWorkletNode(this.playCtx, "playback-processor", {
       numberOfInputs: 0,
@@ -400,7 +385,7 @@ class VoiceClient {
   }
 
   isMicOpen() {
-    return !this.muted && (this.allowBargeIn || !this.playing);
+    return !this.muted && (!this.pushToTalk || this.talking) && (this.allowBargeIn || !this.playing);
   }
 
   syncMic() {
@@ -409,12 +394,20 @@ class VoiceClient {
 
   setMuted(muted) {
     this.muted = muted;
+    if (muted) this.talking = false;
+    this.syncMic();
+    this.handlers.onState();
+  }
+
+  setTalking(talking) {
+    this.talking = talking;
     this.syncMic();
     this.handlers.onState();
   }
 
   setPlaying(playing) {
     this.playing = playing;
+    if (playing && !this.allowBargeIn) this.talking = false;
     this.syncMic();
     this.handlers.onState();
     if (!playing && this.ended) this.finishSoon();
@@ -477,6 +470,7 @@ class VoiceClient {
   stop() {
     if (this.stopped) return;
     this.stopped = true;
+    this.talking = false;
     try {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         this.ws.send(JSON.stringify({ type: "end" }));
@@ -500,6 +494,7 @@ class VoiceClient {
     if (this.connection !== "connected") return "Đang kết nối…";
     if (this.playing) return this.allowBargeIn ? "AI đang nói · bạn có thể ngắt lời" : "AI đang nói";
     if (this.muted) return "Mic đang tắt";
+    if (this.pushToTalk && !this.talking) return "Giữ nút để trả lời";
     return "Đang nghe bạn nói…";
   }
 
@@ -520,6 +515,10 @@ function renderVoiceState() {
   $("#orb-label").textContent = voice.label;
   $("#mute-btn").textContent = voice.muted ? "Bật mic" : "Tắt mic";
   $("#mute-btn").setAttribute("aria-pressed", String(voice.muted));
+  $("#talk-btn").hidden = !voice.pushToTalk;
+  $("#talk-btn").textContent = voice.talking ? "Đang thu tiếng nói…" : "Giữ để nói";
+  $("#talk-btn").setAttribute("aria-pressed", String(voice.talking));
+  $("#talk-btn").disabled = voice.muted || (voice.playing && !voice.allowBargeIn);
 }
 
 function renderLevel(level) {
@@ -581,7 +580,7 @@ async function startInterview(event) {
     } else {
       state.voice = voice;
       renderVoiceState();
-      await voice.start(state.session.id, $("#barge-in").checked);
+      await voice.start(state.session.id, $("#barge-in").checked, $("#push-to-talk").checked);
     }
   } catch (error) {
     if (voice) voice.stop();
@@ -624,70 +623,6 @@ function confirmEnd() {
   if (state.finished || window.confirm("Kết thúc buổi phỏng vấn và xem báo cáo?")) finishInterview();
 }
 
-// -- Bảng giáo viên ---------------------------------------------------------
-
-function toggleTeacher() {
-  const panel = $("#teacher-panel");
-  panel.hidden = !panel.hidden;
-  $("#interview-grid").classList.toggle("with-teacher", !panel.hidden);
-  $("#toggle-teacher").setAttribute("aria-pressed", String(!panel.hidden));
-  clearInterval(state.insightsTimer);
-  if (!panel.hidden) {
-    refreshInsights();
-    state.insightsTimer = setInterval(refreshInsights, 3000);
-  }
-}
-
-async function refreshInsights() {
-  if (!state.session || $("#teacher-panel").hidden) return;
-  try {
-    renderInsights(await api(`/api/sessions/${state.session.id}/insights`));
-  } catch {
-    // Lần làm mới sau sẽ thử lại.
-  }
-}
-
-function scoreChip(label, value) {
-  return h("span", { class: "score" }, `${label} ${value}/4`);
-}
-
-function renderInsights(data) {
-  $("#progress-list").replaceChildren(
-    ...data.concepts.map((c) => {
-      const meta = [
-        c.evidence_count ? `${c.score}/100` : "Chưa có dữ liệu",
-        `Bloom cao nhất: ${BLOOM[c.max_bloom] || "—"}`,
-        `ý chính ${c.covered_key_points}/${c.total_key_points}`,
-      ];
-      if (c.hints) meta.push(`${c.hints} gợi ý`);
-      if (c.rote_flags) meta.push(`${c.rote_flags} lần có dấu hiệu học thuộc`);
-      return h("div", { class: `progress-item status-${c.status}${c.id === data.current_concept_id ? " current" : ""}` },
-        h("div", { class: "progress-top" }, h("span", {}, c.name), h("span", { class: "status-chip" }, STATUS[c.status])),
-        h("div", { class: "bar" }, h("span", { style: `width:${c.evidence_count ? c.score : 0}%` })),
-        h("div", { class: "progress-meta" }, meta.join(" · ")),
-        c.misconceptions.length ? h("div", { class: "progress-warn" }, `Hiểu lầm: ${c.misconceptions.join("; ")}`) : null);
-    }));
-
-  const list = $("#eval-list");
-  if (!data.evaluations.length) {
-    list.replaceChildren(h("p", { class: "muted small" }, "Chưa có lượt nào được chấm."));
-    return;
-  }
-  list.replaceChildren(
-    ...data.evaluations.map((e) =>
-      h("div", { class: "eval-item" },
-        h("div", { class: "eval-top" },
-          h("span", {}, e.concept_name),
-          e.action ? h("span", { class: "action-chip" }, ACTIONS[e.action] || e.action) : null),
-        h("p", { class: "eval-answer" }, `“${truncate(e.answer, 180)}”`),
-        h("div", { class: "scores" },
-          scoreChip("Đúng", e.correctness), scoreChip("Đủ ý", e.completeness), scoreChip("Lập luận", e.reasoning),
-          h("span", { class: "score" }, `Bloom: ${BLOOM[e.bloom_level] || "—"}`),
-          e.rote_signal === "high" ? h("span", { class: "score" }, "Nghi học thuộc") : null),
-        h("p", {}, e.summary),
-        e.reason ? h("p", { class: "eval-reason" }, `Quyết định: ${e.reason}`) : null)));
-}
-
 // -- Báo cáo ----------------------------------------------------------------
 
 function levelBadge(level) {
@@ -703,10 +638,11 @@ function renderReport(report) {
   $("#report").hidden = false;
 
   const ring = $("#score-ring");
-  ring.style.setProperty("--score", report.overall_score);
+  ring.style.setProperty("--score", report.overall_score ?? 0);
   const ringColors = { strong: "var(--success)", good: "#2f78c4", basic: "var(--warning)", gap: "var(--danger)" };
   ring.style.setProperty("--ring", ringColors[report.overall_level] || "var(--muted)");
-  $("#score-value").textContent = report.overall_score;
+  $("#score-value").textContent = report.overall_score ?? "—";
+  $("#score-denominator").hidden = report.overall_score === null;
   const badge = $("#overall-level");
   badge.className = `level-badge level-${report.overall_level}`;
   badge.textContent = LEVELS[report.overall_level];
@@ -714,8 +650,10 @@ function renderReport(report) {
   $("#report-meta").textContent =
     `${state.session.learner_name} · ${new Date(report.generated_at).toLocaleString("vi-VN")} · ` +
     `${state.session.mode === "voice" ? "Phỏng vấn giọng nói" : "Phỏng vấn nhắn tin"}`;
+  $("#report-coverage").textContent =
+    `Đã đánh giá ${report.assessed_concepts}/${report.total_concepts} chủ đề`;
 
-  const learnerPanel = $("#tab-learner");
+  const learnerPanel = $("#report-content");
   const conceptCards = report.concepts.map((c) =>
     h("div", { class: "card concept-card" },
       h("div", { class: "concept-card-head" }, h("h4", {}, c.name), levelBadge(c.level)),
@@ -732,45 +670,12 @@ function renderReport(report) {
         h("ol", { class: "plan" }, report.study_plan.map((step) => h("li", {}, step))))
       : null,
     conceptCards.length ? h("div", { class: "concept-grid" }, conceptCards) : null);
-
-  const rows = report.concepts.map((c) =>
-    h("tr", {},
-      h("td", {}, c.name),
-      h("td", {}, levelBadge(c.level)),
-      h("td", {}, c.level === "not_assessed" ? "—" : `${c.score}`),
-      h("td", {}, BLOOM[c.max_bloom] || "—"),
-      h("td", {}, String(c.hints)),
-      h("td", {}, c.misconceptions.length ? c.misconceptions.join("; ") : "—"),
-      h("td", {}, c.evidence.length ? c.evidence.map((q) => h("div", { class: "quote" }, `“${q}”`)) : "—")));
-  $("#tab-teacher").replaceChildren(
-    h("div", { class: "card report-section" }, h("h3", {}, "Đánh giá khách quan"), h("p", {}, report.summary_for_teacher)),
-    report.teacher_notes.length
-      ? h("div", { class: "card report-section" }, h("h3", {}, "Quan sát đáng chú ý"), bulletList(report.teacher_notes))
-      : null,
-    h("div", { class: "card report-section" },
-      h("h3", {}, "Chi tiết theo chủ đề"),
-      h("div", { class: "table-wrap" },
-        h("table", {},
-          h("thead", {}, h("tr", {}, ...["Chủ đề", "Mức", "Điểm", "Bloom cao nhất", "Gợi ý", "Hiểu lầm", "Trích dẫn"].map((t) => h("th", {}, t)))),
-          h("tbody", {}, rows)))));
-  selectTab("learner");
-}
-
-function selectTab(name) {
-  for (const tab of $$(".tab")) {
-    const active = tab.dataset.tab === name;
-    tab.classList.toggle("active", active);
-    tab.setAttribute("aria-selected", String(active));
-  }
-  $("#tab-learner").hidden = name !== "learner";
-  $("#tab-teacher").hidden = name !== "teacher";
 }
 
 function restart() {
   stopTimers();
   state.session = null;
   state.finished = false;
-  if (!$("#teacher-panel").hidden) toggleTeacher();
   showView("setup");
 }
 
@@ -790,12 +695,36 @@ function init() {
   $("#end-btn").addEventListener("click", confirmEnd);
   $("#report-btn").addEventListener("click", finishInterview);
   $("#report-retry").addEventListener("click", finishInterview);
-  $("#toggle-teacher").addEventListener("click", toggleTeacher);
   $("#mute-btn").addEventListener("click", () => state.voice && state.voice.setMuted(!state.voice.muted));
+  const talkButton = $("#talk-btn");
+  const setTalking = (value) => {
+    if (state.voice && state.voice.pushToTalk) state.voice.setTalking(value);
+  };
+  talkButton.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    talkButton.setPointerCapture(event.pointerId);
+    setTalking(true);
+  });
+  for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) {
+    talkButton.addEventListener(type, () => setTalking(false));
+  }
+  talkButton.addEventListener("keydown", (event) => {
+    if (event.code === "Space" || event.code === "Enter") {
+      event.preventDefault();
+      if (!event.repeat) setTalking(true);
+    }
+  });
+  talkButton.addEventListener("keyup", (event) => {
+    if (event.code === "Space" || event.code === "Enter") {
+      event.preventDefault();
+      setTalking(false);
+    }
+  });
+  window.addEventListener("blur", () => setTalking(false));
+  document.addEventListener("visibilitychange", () => { if (document.hidden) setTalking(false); });
   $("#show-captions").addEventListener("change", (event) => {
     $("#chat").classList.toggle("captions-off", !event.target.checked);
   });
-  for (const tab of $$(".tab")) tab.addEventListener("click", () => selectTab(tab.dataset.tab));
   $("#restart-btn").addEventListener("click", restart);
   window.addEventListener("beforeunload", () => state.voice && state.voice.stop());
   loadHealth();

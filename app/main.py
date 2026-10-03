@@ -181,7 +181,7 @@ def list_documents(_: None = Depends(_access_dependency)) -> list[dict]:
 @app.get("/api/documents/{doc_id}")
 def get_document(doc_id: str, _: None = Depends(_access_dependency)) -> dict:
     doc = _document_or_404(doc_id)
-    return {**document_summary(doc), "knowledge_map": doc.knowledge_map.model_dump()}
+    return document_summary(doc)
 
 
 @app.post("/api/sessions")
@@ -214,12 +214,6 @@ async def post_message(session_id: str, body: AnswerIn, _: None = Depends(_acces
     except SessionNotFound as exc:
         raise HTTPException(404, "Không tìm thấy phiên phỏng vấn") from exc
     return {"message": reply, "finished": session.status == "finished"}
-
-
-@app.get("/api/sessions/{session_id}/insights")
-def get_insights(session_id: str, _: None = Depends(_access_dependency)) -> dict:
-    session = _session_or_404(session_id)
-    return engine.insights(session, _document_or_404(session.document_id))
 
 
 @app.post("/api/sessions/{session_id}/finish")

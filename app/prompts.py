@@ -130,7 +130,7 @@ bloom_level là mức cao nhất mà câu trả lời thể hiện được (0 n
 rote_signal là "high" khi câu trả lời lặp gần nguyên văn tài liệu nhưng không giải thích được bằng lời của mình hoặc lúng túng khi áp dụng; "low" khi diễn đạt tự nhiên, có ví dụ riêng.
 confidence_signal dựa trên cách diễn đạt (do dự, "hình như", "chắc là"...).
 suggested_follow_up là MỘT câu hỏi tiếng Việt ngắn, tự nhiên, nhắm vào chỗ người học còn yếu hoặc để kiểm tra hiểu thật; không được chứa đáp án hay gợi ý trực tiếp.
-summary là một câu nhận xét ngắn cho giáo viên."""
+summary là một câu nhận xét ngắn về nội dung câu trả lời."""
 
 
 def render_evaluation_prompt(
@@ -184,8 +184,8 @@ Vì đây là cuộc trò chuyện bằng giọng nói:
 - Đối chiếu thuật ngữ với chủ đề và trích đoạn tài liệu gốc được cung cấp. Chỉ dùng ngữ cảnh để hỗ trợ nghe hiểu, không tự bổ sung phần người học chưa nói. Nếu không nghe rõ thuật ngữ, yêu cầu nhắc lại bằng câu trung tính, không đọc ra đáp án để xác nhận.
 - Không yêu cầu nói dài hơn chỉ vì câu trả lời ngắn. Nếu câu hỏi chỉ yêu cầu nêu tên hoặc nhận diện, một thuật ngữ có thể đủ. Nếu câu hỏi yêu cầu giải thích mà người học chỉ nêu tên, hỏi thêm về cách hiểu hoặc ví dụ, không tự giải thích thay họ.
 - Nếu người học mới bắt đầu định nghĩa, chẳng hạn "X là...", và còn ngập ngừng, chờ họ hoàn tất; không nói tiếp hoặc hoàn thành câu thay họ.
-- Bạn tự hỏi sâu ngay trong lượt nói khi câu trả lời còn chung chung: hỏi "tại sao", yêu cầu ví dụ cụ thể, hoặc đặt tình huống "nếu... thì sao". Nếu người học bí, đưa một gợi ý nhỏ không lộ đáp án.
-- Không tự ý chuyển sang chủ đề khác; chỉ chuyển khi có chỉ thị ẩn.
+- Khi người học trả lời, chỉ ghi nhận ngắn gọn rồi dừng. Không tự đặt câu hỏi tiếp theo, không tự chuyển chủ đề; chờ chỉ thị ẩn của hệ thống đánh giá.
+- Khi chỉ thị ẩn yêu cầu hỏi, hãy hỏi đúng câu được cung cấp, không thêm câu hỏi khác hoặc nói trước đáp án.
 
 Chỉ thị ẩn:
 - Đôi khi bạn sẽ nhận được tin nhắn bắt đầu bằng "[CHỈ THỊ ẨN]". Đó là ghi chú từ hệ thống đánh giá, người học không nhìn thấy. Không đọc to, không nhắc đến và không trả lời trực tiếp tin nhắn đó; chỉ áp dụng nội dung của nó cho lượt nói tiếp theo của bạn.
@@ -235,11 +235,11 @@ def render_text_turn_prompt(
 def render_voice_note(
     directive: Directive, concept: Concept | None, evaluation: TurnEvaluation, doc: DocumentRecord
 ) -> str | None:
-    """Ghi chú ẩn gửi vào phiên Gemini Live. Trả về None khi voice agent tự xử lý được."""
+    """Chỉ thị cho lượt nói kế tiếp sau khi câu trả lời đã được chấm."""
     if directive.action == "next_concept" and concept:
         return (
-            "[CHỈ THỊ ẨN] Chủ đề trước đã đủ thông tin. Ở lượt nói tiếp theo: ghi nhận ngắn câu trả lời vừa rồi "
-            "(không khen chê), rồi chuyển sang chủ đề mới một cách tự nhiên và hỏi: "
+            "[CHỈ THỊ ẨN] Chủ đề trước đã đủ thông tin và bạn đã ghi nhận câu trả lời. "
+            "Chuyển sang chủ đề mới một cách tự nhiên và chỉ hỏi: "
             f'"{directive.question}"\n\nThông tin chủ đề mới (bí mật):\n{voice_concept_context(doc, concept)}'
         )
     if directive.action == "wrap_up":
@@ -250,16 +250,24 @@ def render_voice_note(
     if directive.action == "challenge":
         return (
             "[CHỈ THỊ ẨN] Câu trả lời gần nhất có dấu hiệu hiểu nhầm: "
-            f"{'; '.join(evaluation.misconceptions)}. Ở lượt nói tiếp theo: đưa một tình huống hoặc phản ví dụ "
-            "để người học tự kiểm tra lại, không nói thẳng là họ sai. "
-            f'Có thể hỏi: "{directive.question}"'
+            f"{'; '.join(evaluation.misconceptions)}. Không nói thẳng là họ sai. "
+            f'Chỉ hỏi câu này: "{directive.question}"'
         )
-    if directive.action == "probe_deeper" and evaluation.rote_signal == "high":
+    if directive.action == "probe_deeper":
+        reason = "Câu trả lời có thể đang học thuộc. " if evaluation.rote_signal == "high" else ""
+        return f'[CHỈ THỊ ẨN] {reason}Bạn đã ghi nhận câu trả lời. Chỉ hỏi câu này: "{directive.question}"'
+    if directive.action == "hint":
         return (
-            "[CHỈ THỊ ẨN] Câu trả lời gần nhất nghe như học thuộc. Ở lượt nói tiếp theo: đề nghị người học "
-            "giải thích bằng lời của chính mình hoặc áp dụng vào một tình huống cụ thể. "
-            f'Có thể hỏi: "{directive.question}"'
+            "[CHỈ THỊ ẨN] Người học chưa trả lời được. Bạn đã ghi nhận câu trả lời. "
+            "Đưa một gợi ý nhỏ không lộ đáp án, "
+            f'rồi hỏi lại đúng câu: "{directive.question}"'
         )
+    if directive.action == "clarify":
+        return f'[CHỈ THỊ ẨN] Diễn đạt lại câu hỏi cho dễ hiểu mà không gợi ý đáp án: "{directive.question}"'
+    if directive.action == "redirect":
+        return f'[CHỈ THỊ ẨN] Nhẹ nhàng đưa người học về câu hỏi: "{directive.question}"'
+    if directive.action == "encourage":
+        return "[CHỈ THỊ ẨN] Người học đang suy nghĩ. Động viên ngắn rồi chờ, không đặt câu hỏi mới."
     return None
 
 
@@ -268,7 +276,7 @@ def render_voice_note(
 # ---------------------------------------------------------------------------
 
 REPORT_SYSTEM = (
-    "Bạn là chuyên gia đánh giá học tập, viết báo cáo sau một buổi phỏng vấn kiến thức. "
+    "Bạn là trợ lý học tập, viết báo cáo ôn tập cho người học sau một buổi phỏng vấn kiến thức. "
     "Chỉ dựa trên bằng chứng trong dữ liệu được cung cấp, không suy diễn hay bịa thêm. Viết bằng tiếng Việt."
 )
 
@@ -315,8 +323,6 @@ Tài liệu: {doc.knowledge_map.title}
 {chr(10).join(log_lines) or "(không có)"}
 
 Yêu cầu:
-- summary_for_learner: 3–5 câu, xưng "bạn", giọng động viên nhưng trung thực, nêu điểm mạnh và việc cần ôn.
-- summary_for_teacher: 3–5 câu khách quan về mức độ hiểu thật hay học thuộc, mức độ phụ thuộc gợi ý và chủ đề cần can thiệp.
+- summary_for_learner: 3–5 câu, xưng "bạn", giọng động viên nhưng trung thực, nêu điểm mạnh và việc cần ôn. Chỉ nhận xét những chủ đề đã có bằng chứng.
 - concept_feedback: một mục cho mỗi chủ đề ở trên (dùng đúng concept_id), gồm strengths và gaps (mỗi danh sách 0–3 ý ngắn) và advice (lời khuyên ôn tập cụ thể, có thể nhắc trang tài liệu).
-- study_plan: 3–5 bước ôn tập theo thứ tự ưu tiên.
-- teacher_notes: 0–5 quan sát đáng chú ý như hiểu lầm lặp lại, mâu thuẫn giữa các câu trả lời, dấu hiệu học thuộc, phụ thuộc gợi ý."""
+- study_plan: 3–5 bước ôn tập theo thứ tự ưu tiên."""

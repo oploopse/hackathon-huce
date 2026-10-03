@@ -142,12 +142,26 @@ def chunk_blocks(blocks: list[Block], max_chars: int = 1200) -> list[Chunk]:
 
 
 def select_chunks(chunks: list[Chunk], max_chars: int) -> tuple[list[Chunk], bool]:
-    """Giới hạn lượng văn bản gửi cho LLM; trả về (các chunk được chọn, có bị cắt bớt không)."""
-    selected: list[Chunk] = []
-    total = 0
-    for chunk in chunks:
-        if total + len(chunk.text) > max_chars and selected:
-            return selected, True
-        selected.append(chunk)
-        total += len(chunk.text)
-    return selected, False
+    """Lấy mẫu xuyên suốt tài liệu khi toàn bộ nội dung vượt ngân sách."""
+    if not chunks:
+        return [], False
+    if max_chars <= 0:
+        raise ValueError("max_chars phải lớn hơn 0")
+    if sum(len(chunk.text) for chunk in chunks) <= max_chars:
+        return chunks, False
+
+    # Chọn cả đầu và cuối trước, rồi phân bố đều phần giữa. Dùng độ dài chunk
+    # lớn nhất để các vị trí ưu tiên luôn cùng nằm trong ngân sách.
+    count = min(len(chunks), max(1, max_chars // max(len(c.text) for c in chunks)))
+    positions = [0] if count == 1 else [round(i * (len(chunks) - 1) / (count - 1)) for i in range(count)]
+    chosen: set[int] = set()
+    remaining = max_chars
+    for index in [*positions, *range(len(chunks))]:
+        size = len(chunks[index].text)
+        if index not in chosen and size <= remaining:
+            chosen.add(index)
+            remaining -= size
+    if not chosen:
+        chunk = chunks[0]
+        return [Chunk(id=chunk.id, page=chunk.page, text=chunk.text[:max_chars])], True
+    return [chunks[index] for index in sorted(chosen)], True

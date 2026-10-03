@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from google.genai import types
 
 import app.voice as voice_module
+import app.main as main
 from app.prompts import VOICE_SOURCE_CHARS, render_voice_note, voice_concept_context, voice_system_instruction
 from app.schemas import Chunk, Directive
 
@@ -42,6 +43,7 @@ class FakeLiveSession:
         self.script = script
         self.client_content: list[tuple[str, bool]] = []
         self.audio_chunks = 0
+        self.groups_seen = 0
 
     async def send_client_content(self, turns, turn_complete=True):
         self.client_content.append((turns.parts[0].text, turn_complete))
@@ -52,8 +54,15 @@ class FakeLiveSession:
     async def receive(self):
         if not self.script:
             await asyncio.Event().wait()
-        # Để bộ não chạy ngầm kịp xử lý lượt trước, giống nhịp hội thoại thật.
+        # Gemini chỉ nói câu tiếp theo sau khi nhận quyết định từ bộ não.
+        if self.groups_seen in {2, 4}:
+            required_messages = 2 if self.groups_seen == 2 else 3
+            async def wait_for_note():
+                while len(self.client_content) < required_messages:
+                    await asyncio.sleep(0.01)
+            await asyncio.wait_for(wait_for_note(), timeout=2)
         await asyncio.sleep(TURN_GAP_S)
+        self.groups_seen += 1
         for message in self.script.pop(0):
             yield message
 
@@ -73,10 +82,10 @@ def test_voice_bridge_runs_full_interview(client, document, monkeypatch):
     live = FakeLiveSession(
         [
             model_turn(None, "Chào Lan. A là gì?"),
-            model_turn("A", "Mình hiểu rồi. Bạn cho ví dụ nhé?"),
-            model_turn("Ví dụ về A", "Cảm ơn bạn. Giờ sang B: B là gì?"),
+            model_turn("A", "Mình hiểu rồi."),
+            model_turn(None, "Cảm ơn bạn. B là gì?"),
             model_turn("Câu trả lời tốt về B", "Mình hiểu rồi."),
-            model_turn("Dạ", "Cảm ơn Lan, buổi trò chuyện kết thúc."),
+            model_turn(None, "Cảm ơn Lan, buổi trò chuyện kết thúc."),
         ]
     )
     configs = []
@@ -114,7 +123,7 @@ def test_voice_bridge_runs_full_interview(client, document, monkeypatch):
     assert events.count("turn_complete") == 5
     assert live.audio_chunks == 1
     vad = configs[0].realtime_input_config.automatic_activity_detection
-    assert vad.start_of_speech_sensitivity == types.StartSensitivity.START_SENSITIVITY_HIGH
+    assert vad.start_of_speech_sensitivity == types.StartSensitivity.START_SENSITIVITY_LOW
     assert vad.end_of_speech_sensitivity == types.EndSensitivity.END_SENSITIVITY_LOW
     assert vad.silence_duration_ms == 1500
     assert vad.prefix_padding_ms == 100
@@ -122,24 +131,22 @@ def test_voice_bridge_runs_full_interview(client, document, monkeypatch):
 
     opening, *notes = live.client_content
     assert opening[1] is True and opening[0].startswith("[CHỈ THỊ ẨN]")
-    assert [turn_complete for _, turn_complete in notes] == [False, False]
+    assert [turn_complete for _, turn_complete in notes] == [True, True]
     assert "chủ đề mới" in notes[0][0] and "Concept B" in notes[0][0]
     assert "Nội dung bài học." in notes[0][0]
     assert "kết thúc" in notes[1][0]
 
-    insights = client.get(f"/api/sessions/{session['id']}/insights").json()
-    assert insights["status"] == "finished"
-    by_id = {c["id"]: c for c in insights["concepts"]}
-    # Câu "Ví dụ về A" đến trước khi AI chuyển chủ đề nên vẫn được tính cho A.
-    assert by_id["c1"]["evidence_count"] == 2
-    assert by_id["c2"]["evidence_count"] == 2
-    assert by_id["c1"]["status"] == by_id["c2"]["status"] == "mastered"
+    internal = main.store.get_session(session["id"])
+    assert internal.status == "finished"
+    assert internal.progress["c1"].evidence_count == 1
+    assert internal.progress["c2"].evidence_count == 1
+    assert internal.progress["c1"].status == internal.progress["c2"].status == "mastered"
 
     turns = client.get(f"/api/sessions/{session['id']}").json()["turns"]
-    assert [t["role"] for t in turns] == ["interviewer"] + ["learner", "interviewer"] * 4
+    assert [t["role"] for t in turns] == ["interviewer", "learner", "interviewer", "interviewer", "learner", "interviewer", "interviewer"]
     assert turns[1]["text"] == "A"
-    short_answer = next(ev for ev in insights["evaluations"] if ev["answer"] == "A")
-    assert short_answer["question"] == "Chào Lan. A là gì?"
+    short_answer = next(ev for ev in internal.evaluations if ev.answer == "A")
+    assert short_answer.question == "A là gì?"
 
 
 def test_voice_source_context_follows_current_concept():
@@ -181,3 +188,40 @@ def test_voice_source_context_is_bounded_and_handles_missing_references():
     context = voice_concept_context(doc, concept)
     assert concept.name in context
     assert "Trích đoạn tài liệu gốc" not in context
+
+
+def test_normal_probe_is_sent_as_a_question():
+    note = render_voice_note(
+        Directive(action="probe_deeper", concept_id="c1", question="Bạn có thể cho ví dụ không?"),
+        make_concept("c1"), make_eval(), make_doc(make_concept("c1")),
+    )
+    assert "Bạn có thể cho ví dụ không?" in note
+    assert "Chỉ hỏi câu này" in note
+
+
+def test_dropped_audio_is_not_graded(client, document):
+    class Socket:
+        def __init__(self):
+            self.messages = []
+
+        async def send_text(self, message):
+            self.messages.append(json.loads(message))
+
+    session_id = client.post(
+        "/api/sessions", json={"document_id": document["id"], "mode": "voice"}
+    ).json()["session"]["id"]
+    session = main.store.get_session(session_id)
+    bridge = voice_module.VoiceBridge(Socket(), main.engine, session, main.store.get_document(document["id"]))
+    bridge.audio_in = asyncio.Queue(maxsize=1)
+    bridge._enqueue_audio(b"old")
+    bridge._enqueue_audio(b"new")
+    bridge.learner_buf.append("một đoạn transcript thiếu")
+    bridge._complete_turn()
+    turn = bridge.turns.get_nowait()
+    asyncio.run(bridge._process_turn(*turn))
+
+    saved = main.store.get_session(session_id)
+    assert not saved.evaluations
+    assert saved.progress[saved.current_concept_id].evidence_count == 0
+    assert "nhắc lại" in bridge.pending_note
+    assert any(event["type"] == "warning" for event in bridge.ws.messages)

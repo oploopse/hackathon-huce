@@ -45,6 +45,6 @@ def test_long_paragraph_is_split_by_sentences():
 def test_select_chunks_marks_truncation():
     chunks = [Chunk(id=f"ch{i}", text="x" * 100) for i in range(5)]
     selected, truncated = select_chunks(chunks, max_chars=250)
-    assert [c.id for c in selected] == ["ch0", "ch1"]
+    assert [c.id for c in selected] == ["ch0", "ch4"]
     assert truncated
     assert select_chunks(chunks, max_chars=10_000) == (chunks, False)

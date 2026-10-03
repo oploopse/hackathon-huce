@@ -12,7 +12,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
     this.accCount = 0;
     this.position = 0;
     this.boundary = this.ratio;
-    this.muted = false;
+    this.muted = true;
     this.levelSum = 0;
     this.levelBlocks = 0;
     this.port.onmessage = (event) => {

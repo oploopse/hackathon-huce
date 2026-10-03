@@ -60,6 +60,8 @@ class InterviewEngine:
         )
         director.switch_concept(session, order[0])
         session.progress[order[0]].asked_questions.append(director.first_question(doc.concept(order[0])))
+        if mode == "voice":
+            session.last_question = director.first_question(doc.concept(order[0]))
         session.last_action = "ask_main"
         return session
 
@@ -100,9 +102,12 @@ class InterviewEngine:
 
     # -- Xử lý từng lượt -------------------------------------------------------
 
-    def record_turn(self, session: SessionRecord, role: str, text: str) -> None:
-        session.turns.append(Turn(role=role, text=text, concept_id=session.current_concept_id))
-        if role == "interviewer":
+    def record_turn(
+        self, session: SessionRecord, role: str, text: str, *,
+        concept_id: str | None = None, update_question: bool = True,
+    ) -> None:
+        session.turns.append(Turn(role=role, text=text, concept_id=concept_id or session.current_concept_id))
+        if role == "interviewer" and update_question:
             session.last_question = text
 
     async def process_answer(
@@ -187,58 +192,3 @@ class InterviewEngine:
             session.report = await generate_report(session, doc)
             self.store.save_session(session)
             return session.report
-
-    # -- Bảng giáo viên ---------------------------------------------------------
-
-    def insights(self, session: SessionRecord, doc: DocumentRecord) -> dict:
-        concepts = []
-        for concept_id in session.concept_order:
-            concept = doc.concept(concept_id)
-            progress = session.progress[concept_id]
-            concepts.append(
-                {
-                    "id": concept_id,
-                    "name": concept.name,
-                    "importance": concept.importance,
-                    "status": progress.status,
-                    "score": round(progress.score * 100),
-                    "evidence_count": progress.evidence_count,
-                    "hints": progress.hints,
-                    "max_bloom": progress.max_bloom,
-                    "rote_flags": progress.rote_flags,
-                    "covered_key_points": len(progress.covered_key_points),
-                    "total_key_points": len(concept.key_points),
-                    "misconceptions": progress.misconceptions,
-                }
-            )
-        names = {c.id: c.name for c in doc.knowledge_map.concepts}
-        evaluations = []
-        for record in reversed(session.evaluations[-12:]):
-            ev = record.evaluation
-            evaluations.append(
-                {
-                    "concept_name": names.get(record.concept_id, record.concept_id),
-                    "question": record.question,
-                    "answer": record.answer,
-                    "intent": ev.intent,
-                    "correctness": ev.correctness,
-                    "completeness": ev.completeness,
-                    "reasoning": ev.reasoning,
-                    "bloom_level": ev.bloom_level,
-                    "rote_signal": ev.rote_signal,
-                    "confidence_signal": ev.confidence_signal,
-                    "summary": ev.summary,
-                    "action": record.directive.action if record.directive else None,
-                    "reason": record.directive.reason if record.directive else None,
-                    "at": record.at.isoformat(),
-                }
-            )
-        return {
-            "status": session.status,
-            "mode": session.mode,
-            "elapsed_seconds": int((utcnow() - session.created_at).total_seconds()),
-            "time_limit_seconds": settings.interview_minutes * 60,
-            "current_concept_id": session.current_concept_id,
-            "concepts": concepts,
-            "evaluations": evaluations,
-        }

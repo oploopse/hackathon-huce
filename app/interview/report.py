@@ -32,8 +32,6 @@ async def generate_report(session: SessionRecord, doc: DocumentRecord) -> Report
         progress = session.progress[concept_id]
         if progress.status == "in_progress":
             progress.status = final_status(progress)
-        if progress.status == "pending":
-            continue
         concept = doc.concept(concept_id)
         pages = sorted({chunks[c].page for c in concept.source_chunks if c in chunks and chunks[c].page})
         assessed.append((concept, progress, round(progress.score * 100), pages))
@@ -45,6 +43,7 @@ async def generate_report(session: SessionRecord, doc: DocumentRecord) -> Report
     else:
         overall = 0
 
+    complete = len(evaluated) == len(session.concept_order)
     narrative: ReportNarrative | None = None
     if evaluated:
         prompt = render_report_prompt(doc, session.learner_name, evaluated, session.evaluations)
@@ -56,11 +55,6 @@ async def generate_report(session: SessionRecord, doc: DocumentRecord) -> Report
     concept_reports = []
     for concept, progress, score, pages in assessed:
         fb = feedback.get(concept.id)
-        evidence = [
-            r.evaluation.evidence_quote
-            for r in session.evaluations
-            if r.concept_id == concept.id and r.evaluation.evidence_quote.strip()
-        ][:2]
         concept_reports.append(
             ConceptReport(
                 concept_id=concept.id,
@@ -69,13 +63,9 @@ async def generate_report(session: SessionRecord, doc: DocumentRecord) -> Report
                 status=progress.status,
                 level=concept_level(progress.status, score),
                 score=score if progress.evidence_count else 0,
-                max_bloom=progress.max_bloom,
-                hints=progress.hints,
                 strengths=fb.strengths if fb else [],
                 gaps=fb.gaps if fb else [],
-                misconceptions=progress.misconceptions,
                 advice=fb.advice if fb else "",
-                evidence=evidence,
                 review_pages=pages,
             )
         )
@@ -83,20 +73,24 @@ async def generate_report(session: SessionRecord, doc: DocumentRecord) -> Report
     if narrative is None:
         no_data = "Buổi phỏng vấn chưa có đủ câu trả lời để đánh giá."
         return Report(
-            overall_score=0,
+            overall_score=None,
             overall_level="not_assessed",
+            assessed_concepts=0,
+            total_concepts=len(session.concept_order),
             summary_for_learner=no_data,
-            summary_for_teacher=no_data,
             concepts=concept_reports,
             study_plan=[],
-            teacher_notes=[],
         )
     return Report(
-        overall_score=overall,
-        overall_level=overall_level(overall),
-        summary_for_learner=narrative.summary_for_learner,
-        summary_for_teacher=narrative.summary_for_teacher,
+        overall_score=overall if complete else None,
+        overall_level=overall_level(overall) if complete else "not_assessed",
+        assessed_concepts=len(evaluated),
+        total_concepts=len(session.concept_order),
+        summary_for_learner=(
+            narrative.summary_for_learner if complete else
+            f"Đã đánh giá {len(evaluated)}/{len(session.concept_order)} chủ đề; chưa đủ dữ liệu để kết luận chung. "
+            + narrative.summary_for_learner
+        ),
         concepts=concept_reports,
         study_plan=narrative.study_plan,
-        teacher_notes=narrative.teacher_notes,
     )

@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     fast_model: str = "gemini-3.5-flash-lite"
     live_model: str = "gemini-3.8-live"
     live_voice: str = "Kore"
-    vad_silence_ms: int = 1500
+    vad_silence_ms: int = 1800
     vad_prefix_padding_ms: int = 100
 
     interview_minutes: int = 15

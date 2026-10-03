@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 def utcnow() -> datetime:
@@ -93,7 +93,7 @@ class TurnEvaluation(BaseModel):
     rote_signal: Signal = Field(description="Mức độ có dấu hiệu học thuộc mà không hiểu")
     confidence_signal: Signal = Field(description="Mức độ tự tin thể hiện qua cách diễn đạt")
     evidence_quote: str = Field(description="Trích nguyên văn ngắn từ câu trả lời; rỗng nếu không có nội dung")
-    summary: str = Field(description="Một câu nhận xét ngắn cho giáo viên")
+    summary: str = Field(description="Một câu nhận xét ngắn về nội dung câu trả lời")
     suggested_follow_up: str = Field(description="Một câu hỏi để hỏi sâu hơn, không lộ đáp án")
 
 
@@ -152,10 +152,8 @@ class ConceptFeedback(BaseModel):
 
 class ReportNarrative(BaseModel):
     summary_for_learner: str
-    summary_for_teacher: str
     concept_feedback: list[ConceptFeedback]
     study_plan: list[str]
-    teacher_notes: list[str]
 
 
 class ConceptReport(BaseModel):
@@ -165,25 +163,28 @@ class ConceptReport(BaseModel):
     status: ConceptStatus
     level: Level
     score: int
-    max_bloom: int
-    hints: int
     strengths: list[str]
     gaps: list[str]
-    misconceptions: list[str]
     advice: str
-    evidence: list[str]
     review_pages: list[int]
 
 
 class Report(BaseModel):
     generated_at: datetime = Field(default_factory=utcnow)
-    overall_score: int
+    overall_score: int | None
     overall_level: Level
+    assessed_concepts: int = 0
+    total_concepts: int = 0
     summary_for_learner: str
-    summary_for_teacher: str
     concepts: list[ConceptReport]
     study_plan: list[str]
-    teacher_notes: list[str]
+
+    @model_validator(mode="after")
+    def populate_legacy_coverage(self) -> "Report":
+        if self.total_concepts == 0 and self.concepts:
+            self.total_concepts = len(self.concepts)
+            self.assessed_concepts = sum(c.level != "not_assessed" for c in self.concepts)
+        return self
 
 
 # ---------------------------------------------------------------------------

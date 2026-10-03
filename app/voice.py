@@ -49,7 +49,7 @@ class VoiceBridge:
         self.system_instruction, self.opening = engine.voice_prompts(session, doc)
 
         self.audio_in: asyncio.Queue[bytes] = asyncio.Queue(maxsize=AUDIO_QUEUE_MAX)
-        self.turns: asyncio.Queue[tuple[int, str, str]] = asyncio.Queue()
+        self.turns: asyncio.Queue[tuple[int, str, str, str, bool]] = asyncio.Queue()
         self.closed = asyncio.Event()
         self.send_lock = asyncio.Lock()
 
@@ -57,8 +57,9 @@ class VoiceBridge:
         self.pending_note: str | None = None
         self.resume_handle: str | None = None
         self.turn_counter = 0
-        self.note_turn: int | None = None
         self.wrap_up_turn: int | None = None
+        self.active_question = session.last_question
+        self.audio_dropped = False
         self.learner_buf: list[str] = []
         self.interviewer_buf: list[str] = []
         self.model_spoke = False
@@ -125,6 +126,7 @@ class VoiceBridge:
     def _enqueue_audio(self, chunk: bytes) -> None:
         if self.audio_in.full():
             self.audio_in.get_nowait()
+            self.audio_dropped = True
         self.audio_in.put_nowait(chunk)
 
     async def _pump_audio(self, live) -> None:
@@ -153,7 +155,7 @@ class VoiceBridge:
             output_audio_transcription=types.AudioTranscriptionConfig(),
             realtime_input_config=types.RealtimeInputConfig(
                 automatic_activity_detection=types.AutomaticActivityDetection(
-                    start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,
+                    start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_LOW,
                     end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW,
                     prefix_padding_ms=settings.vad_prefix_padding_ms,
                     silence_duration_ms=settings.vad_silence_ms,
@@ -174,7 +176,7 @@ class VoiceBridge:
 
     async def _send_note(self, live, note: str) -> None:
         await live.send_client_content(
-            turns=types.Content(role="user", parts=[types.Part(text=note)]), turn_complete=False
+            turns=types.Content(role="user", parts=[types.Part(text=note)]), turn_complete=True
         )
 
     async def _run_gemini(self) -> None:
@@ -217,6 +219,8 @@ class VoiceBridge:
             log.info("Nối lại Gemini Live cho phiên %s (lần %d)", self.session.id, reconnects)
 
     def _drop_stale_audio(self) -> None:
+        if not self.audio_in.empty():
+            self.audio_dropped = True
         while not self.audio_in.empty():
             self.audio_in.get_nowait()
 
@@ -259,60 +263,84 @@ class VoiceBridge:
         learner_text = "".join(self.learner_buf).strip()
         interviewer_text = "".join(self.interviewer_buf).strip()
         spoke = self.model_spoke
+        dropped_audio = self.audio_dropped
         self.learner_buf.clear()
         self.interviewer_buf.clear()
         self.model_spoke = False
-        if not (learner_text or interviewer_text or spoke):
+        self.audio_dropped = False
+        if not (learner_text or interviewer_text or spoke or dropped_audio):
             return
         self.turn_counter += 1
-        self.turns.put_nowait((self.turn_counter, learner_text, interviewer_text))
+        self.turns.put_nowait(
+            (self.turn_counter, learner_text, interviewer_text, self.active_question, dropped_audio)
+        )
 
     # -- Bộ não chạy ngầm ------------------------------------------------------
 
     async def _brain_worker(self) -> None:
         while True:
-            turn_no, learner_text, interviewer_text = await self.turns.get()
+            turn_no, learner_text, interviewer_text, question, dropped_audio = await self.turns.get()
             try:
-                await self._process_turn(turn_no, learner_text, interviewer_text)
+                await self._process_turn(turn_no, learner_text, interviewer_text, question, dropped_audio)
             except Exception:
                 log.exception("Lỗi khi xử lý lượt %d của phiên %s", turn_no, self.session.id)
             finally:
                 self.turns.task_done()
 
-    async def _process_turn(self, turn_no: int, learner_text: str, interviewer_text: str) -> None:
-        note_applied = self.note_turn is None or turn_no > self.note_turn
+    async def _process_turn(
+        self, turn_no: int, learner_text: str, interviewer_text: str,
+        question: str, dropped_audio: bool,
+    ) -> None:
         note: str | None = None
         directive = None
         async with self.engine.lock(self.session.id):
-            if learner_text:
-                question = self.session.last_question
+            concept_id = self.session.current_concept_id
+            if dropped_audio:
+                note = (
+                    "[CHỈ THỊ ẨN] Một phần âm thanh câu trả lời đã bị mất. "
+                    "Nói rằng bạn chưa nghe rõ và xin người học nhắc lại; không gợi ý đáp án."
+                )
+            elif learner_text:
                 self.engine.record_turn(self.session, "learner", learner_text)
                 try:
                     evaluation, directive = await self.engine.process_answer(
                         self.session, self.doc, question, learner_text,
-                        defer_switch=True, note_applied=note_applied,
+                        defer_switch=False,
                     )
                 except LLMError as exc:
                     log.warning("Không chấm được lượt %d: %s", turn_no, exc)
-                    await self._send({"type": "warning", "message": "Bỏ qua chấm điểm một lượt do lỗi Gemini API."})
+                    await self._send({"type": "warning", "message": "Chưa đánh giá được câu trả lời; hãy nói lại sau một lát."})
                     evaluation = directive = None
+                    note = (
+                        "[CHỈ THỊ ẨN] Hệ thống tạm thời chưa xử lý được câu trả lời vừa rồi. "
+                        f'Xin người học nhắc lại và hỏi lại đúng câu: "{question}". Không gợi ý đáp án.'
+                    )
                 if directive:
                     concept = self.doc.concept(directive.concept_id) if directive.concept_id else None
                     note = render_voice_note(directive, concept, evaluation, self.doc)
             if interviewer_text:
-                self.engine.record_turn(self.session, "interviewer", interviewer_text)
+                self.engine.record_turn(
+                    self.session, "interviewer", interviewer_text,
+                    concept_id=concept_id, update_question=False,
+                )
             self.engine.store.save_session(self.session)
 
         if self.wrap_up_turn is not None and turn_no > self.wrap_up_turn:
             await self._end_session()
             return
         if note:
+            if dropped_audio:
+                await self._send({"type": "warning", "message": "Âm thanh bị gián đoạn; hãy nhắc lại câu trả lời."})
             if self.live is not None:
                 await self._send_note(self.live, note)
             else:
                 self.pending_note = note
-            self.note_turn = self.turn_counter
-            if directive.action == "wrap_up":
+            if directive and directive.question:
+                self.active_question = directive.question
+                async with self.engine.lock(self.session.id):
+                    self.session.last_question = directive.question
+                    self.engine.store.save_session(self.session)
+            if directive and directive.action == "wrap_up":
                 self.wrap_up_turn = self.turn_counter
 
     async def _end_session(self) -> None:
