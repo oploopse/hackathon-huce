@@ -1,0 +1,16 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Mic &#196;&#145;ang b&#225;&#186;&#173;t" clip-path="url(#clip0_0_9)">
+<circle id="Ellipse" cx="32" cy="32" r="32" fill="#0E7C86" fill-opacity="0.08"/>
+<circle id="Ellipse_2" cx="32" cy="32" r="26" fill="#0E7C86"/>
+<g id="icon/mic">
+<path id="Vector" d="M32 22.8333C31.2707 22.8333 30.5712 23.1231 30.0555 23.6388C29.5397 24.1545 29.25 24.854 29.25 25.5833V32C29.25 32.7293 29.5397 33.4288 30.0555 33.9445C30.5712 34.4603 31.2707 34.75 32 34.75C32.7293 34.75 33.4288 34.4603 33.9445 33.9445C34.4603 33.4288 34.75 32.7293 34.75 32V25.5833C34.75 24.854 34.4603 24.1545 33.9445 23.6388C33.4288 23.1231 32.7293 22.8333 32 22.8333Z" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path id="Vector_2" d="M38.4167 30.1667V32C38.4167 33.7018 37.7406 35.3339 36.5373 36.5373C35.3339 37.7406 33.7018 38.4167 32 38.4167C30.2982 38.4167 28.6661 37.7406 27.4627 36.5373C26.2594 35.3339 25.5833 33.7018 25.5833 32V30.1667" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path id="Vector_3" d="M32 38.4167V41.1667" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</g>
+</g>
+<defs>
+<clipPath id="clip0_0_9">
+<rect width="64" height="64" fill="white"/>
+</clipPath>
+</defs>
+</svg>
