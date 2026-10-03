@@ -44,21 +44,11 @@ function renderStepper(view) {
 
 function renderHeaderChip(view) {
   const chip = $("#header-chip");
-  if (view !== "setup" && flow.document) {
-    chip.hidden = false;
-    chip.className = "chip header-chip";
-    chip.replaceChildren(img(ICONS.book, 14), h("span", {}, flow.document.title));
-    chip.title = flow.document.title;
-    return;
-  }
   const health = flow.health;
-  chip.hidden = !health;
+  // Theo thiết kế, màn Thiết lập không có chip trên header; chỉ hiện khi thiếu API key.
+  chip.hidden = !health || health.llm_configured;
   if (!health) return;
-  if (health.llm_configured) {
-    chip.className = "chip header-chip is-success";
-    chip.replaceChildren(img(ICONS.dot, 6), h("span", {}, `Gemini · ${health.models.live}`));
-    chip.title = `Não: ${health.models.brain} · Nhắn tin: ${health.models.fast} · Giọng nói: ${health.models.live}`;
-  } else {
+  if (!health.llm_configured) {
     chip.className = "chip header-chip is-warn";
     chip.replaceChildren(h("span", {}, "Chưa có GEMINI_API_KEY"));
     chip.title = "Tạo file .env từ .env.example, điền key rồi khởi động lại server";
@@ -79,12 +69,17 @@ function show(view) {
 async function startInterview(options) {
   const { doc, learnerName, mode, bargeIn } = options;
   const voice = mode === "voice" ? interview.createVoice() : null;
+  // "Nói rồi sửa" dùng phiên nhắn tin; giọng nói chạy trên trình duyệt (web/js/speech.js).
+  const dictate = mode === "dictate";
+  if (dictate) interview.primeSpeech();
   try {
-    const result = await api.startSession({ documentId: doc.id, learnerName, mode });
+    const result = await api.startSession({ documentId: doc.id, learnerName, mode: dictate ? "text" : mode });
     flow.document = doc;
     flow.options = options;
     show("interview");
-    await interview.start({ session: result.session, message: result.message, voice, bargeIn });
+    // Ô viết đáp án trong chế độ giọng nói chỉ gửi được khi máy chủ báo hỗ trợ (web/API_CONTRACT.md).
+    const textInput = Boolean(flow.health && flow.health.voice_text_input);
+    await interview.start({ session: result.session, message: result.message, voice, bargeIn, textInput, dictate });
   } catch (error) {
     if (voice) voice.stop();
     interview.dispose();

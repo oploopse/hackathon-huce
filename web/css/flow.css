@@ -520,6 +520,12 @@
 .composer { display: flex; align-items: flex-end; gap: 10px; }
 .composer .answer-input { min-height: 72px; }
 
+/* Ô viết hoặc sửa câu trả lời trong chế độ giọng nói */
+.answer-part { display: flex; flex-direction: column; gap: 18px; }
+.writer { gap: 8px; }
+.writer .answer-input { min-height: 84px; }
+.answer-foot .foot-buttons { flex-wrap: wrap; }
+
 .teacher-panel { position: sticky; top: 72px; gap: 14px; max-height: calc(100vh - 96px); overflow-y: auto; }
 .teacher-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .teacher-head h2 { font-size: 16px; font-weight: 600; }

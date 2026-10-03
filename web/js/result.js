@@ -2,9 +2,6 @@
 
 import * as api from "./api.js";
 import { ICONS, formatDuration, h, img, maskIcon, notice, pillButton, truncate } from "./dom.js";
-import { isFollowUp } from "./interview.js";
-
-const BLOOM = ["—", "Nhớ", "Hiểu", "Vận dụng", "Phân tích", "Đánh giá", "Sáng tạo"];
 
 const LEVEL = {
   strong: { label: "Vững", chip: "is-success", headline: "Nắm vững phần này" },
@@ -13,7 +10,6 @@ const LEVEL = {
   gap: { label: "Cần ôn lại", chip: "chip-danger", headline: "Cần ôn lại trước khi thi" },
   not_assessed: { label: "Chưa đánh giá", chip: "", headline: "Chưa đủ câu trả lời để đánh giá" },
 };
-const UNSCORED = new Set(["clarification_request", "thinking_aloud", "off_topic", "small_talk"]);
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 function tick() {
@@ -168,35 +164,6 @@ function radar(concepts, previous) {
   return svg;
 }
 
-function verdict(evaluation) {
-  if (UNSCORED.has(evaluation.intent)) return { text: "Không chấm", cls: "chip chip-white chip-small", weak: false };
-  const ratio = (evaluation.correctness + evaluation.completeness + evaluation.reasoning) / 12;
-  if (ratio >= 0.75) return { text: "Tốt", cls: "chip is-success chip-small", weak: false };
-  if (ratio >= 0.45) return { text: "Một phần", cls: "chip chip-white chip-small", weak: false };
-  return { text: "Chưa đạt", cls: "chip chip-danger-solid chip-small", weak: true };
-}
-
-function logItems(insights) {
-  if (!insights || !insights.evaluations.length) {
-    return [h("p", { class: "muted" }, "Chưa có câu trả lời nào được chấm.")];
-  }
-  const evaluations = [...insights.evaluations].reverse();
-  return evaluations.map((e, i) => {
-    const follow = i > 0 && isFollowUp(evaluations[i - 1].action);
-    const v = verdict(e);
-    return h("article", { class: `log-item${v.weak ? " is-weak" : ""}` },
-      h("div", { class: "log-head" },
-        h("strong", {}, `Câu ${i + 1}`),
-        h("span", { class: "chip chip-white chip-small" }, follow ? "Đào sâu" : "Chủ đề mới"),
-        h("span", { class: "chip chip-white chip-small" }, truncate(e.concept_name, 28)),
-        h("span", { class: "spacer" }),
-        h("span", { class: v.cls }, v.text)),
-      h("h3", {}, truncate(e.question, 140)),
-      h("p", { class: "summary" }, e.summary),
-      v.weak && e.answer ? h("p", { class: "said" }, `Bạn nói: "${truncate(e.answer, 160)}"`) : null);
-  });
-}
-
 function criticalGap(report) {
   const candidates = report.concepts
     .filter((c) => c.level !== "not_assessed" && (c.misconceptions.length || c.gaps.length))
@@ -237,32 +204,6 @@ function feedbackCard(report) {
         c.review_pages.length ? h("p", { class: "pages" }, img(ICONS.book, 14), `Xem lại trang ${c.review_pages.join(", ")}`) : null))));
 }
 
-/** Phần dành cho giáo viên, như tab "Cho giáo viên" của báo cáo trong giao diện cũ. */
-function teacherSection(report) {
-  const rows = report.concepts.map((c) =>
-    h("tr", {},
-      h("td", {}, c.name),
-      h("td", {}, levelChip(c.level)),
-      h("td", {}, c.level === "not_assessed" ? "—" : String(c.score)),
-      h("td", {}, BLOOM[c.max_bloom] || "—"),
-      h("td", {}, String(c.hints)),
-      h("td", {}, c.misconceptions.length ? c.misconceptions.join("; ") : "—"),
-      h("td", {}, c.evidence.length ? c.evidence.map((q) => h("p", { class: "quote" }, `“${q}”`)) : "—")));
-  return h("div", { class: "teacher-section" },
-    h("section", { class: "result-card" },
-      h("div", { class: "card-head" }, h("h2", {}, "Đánh giá khách quan")),
-      h("p", {}, report.summary_for_teacher)),
-    report.teacher_notes.length
-      ? h("section", { class: "result-card" }, h("div", { class: "card-head" }, h("h2", {}, "Quan sát đáng chú ý")), bulletList(report.teacher_notes))
-      : null,
-    h("section", { class: "result-card" },
-      h("div", { class: "card-head" }, h("h2", {}, "Chi tiết theo chủ đề")),
-      h("div", { class: "table-wrap" },
-        h("table", { class: "teacher-table" },
-          h("thead", {}, h("tr", {}, ["Chủ đề", "Mức", "Điểm", "Bloom cao nhất", "Gợi ý", "Hiểu lầm", "Trích dẫn"].map((t) => h("th", {}, t)))),
-          h("tbody", {}, rows)))));
-}
-
 /**
  * Màn 06. previous = { score, concepts: { [concept_id]: score } } của lần thi trước với cùng tài liệu.
  */
@@ -271,7 +212,8 @@ export function renderResult(root, { report, insights, sessionInfo, doc, summary
   const assessed = report.concepts.filter((c) => c.level !== "not_assessed");
   const misconceptions = assessed.some((c) => c.misconceptions.length);
   const learnerName = sessionInfo?.learner_name || summary.session.learner_name;
-  const modeLabel = summary.session.mode === "voice" ? "Phỏng vấn giọng nói" : "Phỏng vấn nhắn tin";
+  const modeLabel = summary.dictate ? "Phỏng vấn nói rồi sửa"
+    : summary.session.mode === "voice" ? "Phỏng vấn giọng nói" : "Phỏng vấn nhắn tin";
   const diff = previous && report.overall_level !== "not_assessed" ? report.overall_score - previous.score : null;
   const finishedAt = new Date(report.generated_at).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
 
@@ -313,65 +255,17 @@ export function renderResult(root, { report, insights, sessionInfo, doc, summary
     report.study_plan.length ? h("div", { class: "card-head" }, h("h2", {}, "Kế hoạch ôn tập")) : null,
     report.study_plan.length ? h("ol", { class: "plan" }, report.study_plan.map((step) => h("li", {}, step))) : null);
 
-  const logCard = h("section", { class: "result-card" },
-    h("div", { class: "card-head" },
-      h("h2", {}, "Nhật ký phỏng vấn"),
-      h("p", {}, "Nhận xét của giám khảo cho từng lượt trả lời")),
-    logItems(insights));
-
-  const learnerPanel = h("div", { class: "tab-panel", role: "tabpanel" },
-    h("div", { class: "result-columns" }, mapCard, logCard),
-    feedbackCard(report));
-  const teacherPanel = h("div", { class: "tab-panel", role: "tabpanel", hidden: true }, teacherSection(report));
-  const tabs = [["learner", "Cho người học", learnerPanel], ["teacher", "Cho giáo viên", teacherPanel]].map(([key, label, panel]) =>
-    h("button", {
-      type: "button",
-      class: "preset tab",
-      role: "tab",
-      "aria-pressed": String(key === "learner"),
-      "aria-selected": String(key === "learner"),
-      onclick: () => {
-        for (const button of tabs) {
-          const active = button.dataset.key === key;
-          button.setAttribute("aria-pressed", String(active));
-          button.setAttribute("aria-selected", String(active));
-        }
-        learnerPanel.hidden = key !== "learner";
-        teacherPanel.hidden = key !== "teacher";
-        panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      },
-      "data-key": key,
-    }, label));
-
-  const transcript = h("section", { class: "transcript-card", hidden: true },
-    h("h2", {}, "Toàn bộ bản ghi"),
-    (sessionInfo?.turns || []).map((t) => h("div", { class: `turn${t.role === "learner" ? " is-learner" : ""}` },
-      h("span", {}, t.role === "learner" ? "Bạn" : "Giám khảo AI"), t.text)));
-  const transcriptButton = pillButton("Xem toàn bộ bản ghi", {
-    icon: ICONS.list16,
-    iconSize: 16,
-    className: "btn-pill btn-lg",
-    onclick: () => {
-      transcript.hidden = !transcript.hidden;
-      transcriptButton.querySelector("span").textContent = transcript.hidden ? "Xem toàn bộ bản ghi" : "Ẩn bản ghi";
-      if (!transcript.hidden) transcript.scrollIntoView({ behavior: "smooth", block: "start" });
-    },
-  });
+  const learnerPanel = h("div", { class: "tab-panel" }, mapCard, feedbackCard(report));
 
   root.replaceChildren(
     h("div", { class: "result-top" },
       h("span", { class: "chip is-success" }, img(ICONS.check, 14), `Đã hoàn thành · ${doc.title} (${doc.filename})`),
       h("span", {}, attempt > 1 ? `Lần thi thứ ${attempt} · xong lúc ${finishedAt}` : `Xong lúc ${finishedAt}`)),
     overview,
-    h("div", { class: "presets result-tabs", role: "tablist", "aria-label": "Góc nhìn của báo cáo" }, tabs),
     learnerPanel,
-    teacherPanel,
     h("div", { class: "action-bar" },
       h("button", { type: "button", class: "btn-primary btn-big", onclick: onRetry }, img(ICONS.target, 18), h("span", {}, "Thi lại")),
-      pillButton("Phỏng vấn buổi mới", { icon: ICONS.sliders, iconSize: 18, className: "btn-pill btn-outline-big", onclick: onChangeSetup }),
-      h("span", { class: "spacer" }),
-      transcriptButton),
-    transcript,
+      pillButton("Đổi tài liệu hoặc phạm vi", { icon: ICONS.sliders, iconSize: 18, className: "btn-pill btn-outline-big", onclick: onChangeSetup })),
   );
 }
 

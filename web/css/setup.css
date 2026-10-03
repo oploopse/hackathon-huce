@@ -89,6 +89,87 @@
 .concept-row-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .concept-row-head strong { font-size: 14px; font-weight: 600; }
 .concept-list p { color: var(--muted); font-size: 13px; }
+/* Theo thiết kế không hiện danh sách chủ đề; phần tử vẫn giữ vì setup.js ghi vào. */
+#field-concepts { display: none !important; }
+
+/* Phạm vi trang */
+
+.range-panel {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px 24px;
+  padding: 16px;
+}
+.range-inputs { display: flex; align-items: flex-start; gap: 12px; }
+.text-field-error { width: 140px; color: var(--danger); font-size: 12px; }
+.range-dash {
+  display: flex;
+  align-items: center;
+  height: 44px;
+  margin-top: 24px;
+  color: var(--muted);
+  font-size: 16px;
+}
+
+.coverage { display: flex; flex-direction: column; gap: 10px; width: 220px; padding-bottom: 6px; }
+.coverage-text { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 12px; }
+.coverage-text strong { color: var(--ink); font-weight: 600; }
+.coverage-bar {
+  position: relative;
+  height: 8px;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: var(--primary-soft);
+}
+.coverage-bar span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--start, 0%);
+  width: var(--size, 0%);
+  border-radius: var(--radius-full);
+  background: var(--primary);
+}
+
+/* Số câu hỏi và thời gian */
+
+.slider-panel { display: flex; flex-direction: column; gap: 12px; padding: 16px 16px 14px; }
+.slider-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 16px;
+  min-height: 32px;
+}
+.slider-value { display: flex; align-items: baseline; gap: 8px; }
+.slider-value output {
+  color: var(--primary);
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.slider-value span { color: var(--muted); font-size: 13px; }
+.slider-scale {
+  position: relative;
+  height: 17px;
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.slider-scale span { position: absolute; top: 0; transform: translateX(-50%); }
+.slider-scale span.is-current { color: var(--primary); font-weight: 700; }
+.slider-ends {
+  display: flex;
+  justify-content: space-between;
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+}
 
 /* Tên và hình thức */
 
@@ -182,6 +263,8 @@
   .field-head { flex-wrap: wrap; }
   .field-hint { text-align: left; }
   .dropzone { padding: 24px 16px; }
+  .range-panel { flex-direction: column; align-items: stretch; }
+  .coverage { width: 100%; }
   .mic-panel { flex-wrap: wrap; padding: 16px; gap: 16px; }
   .mic-panel .mic-body { flex-basis: calc(100% - 72px); }
   .mic-panel > .btn-pill { margin-left: 72px; }

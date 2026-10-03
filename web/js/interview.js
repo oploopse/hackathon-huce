@@ -1,8 +1,9 @@
-// Màn 02 · Phỏng vấn, cùng luồng với giao diện cũ (web/app.js): giọng nói real-time qua Gemini Live
-// hoặc nhắn tin, phụ đề hội thoại, và Bảng giáo viên xem đánh giá ngầm trong lúc phỏng vấn.
+// Màn 02 · Phỏng vấn, cùng luồng với giao diện cũ (web/app.js): giọng nói real-time qua Gemini Live,
+// "Nói rồi sửa" (phiên nhắn tin, trình duyệt đọc câu hỏi và nghe câu trả lời) hoặc nhắn tin.
 
 import * as api from "./api.js";
 import { ICONS, formatClock, h, img, maskIcon, notice, pillButton, toast, truncate } from "./dom.js";
+import { Listener, Speaker } from "./speech.js";
 import { VoiceClient } from "./voice.js";
 
 const STATUS = {
@@ -70,13 +71,29 @@ export class Interview {
     return voice;
   }
 
-  async start({ session, message, voice, bargeIn }) {
+  /** Mở khoá giọng đọc của trình duyệt ngay trong thao tác bấm nút (Chrome cần người dùng tương tác). */
+  primeSpeech() {
+    if ("speechSynthesis" in window) speechSynthesis.speak(new SpeechSynthesisUtterance(""));
+  }
+
+  async start({ session, message, voice, bargeIn, textInput = false, dictate = false }) {
     clearInterval(this.timer);
     clearInterval(this.insightsTimer);
     Object.assign(this, {
       session,
       voice,
-      mode: session.mode,
+      // "Nói rồi sửa" nộp qua phiên nhắn tin nên luôn gửi được chữ.
+      textInput: textInput || dictate,
+      speaker: dictate ? new Speaker() : null,
+      listener: dictate ? new Listener({
+        onText: () => this.renderDictation(),
+        onLevels: (levels) => this.renderDictationLevels(levels),
+        onError: (reason) => this.onListenError(reason),
+      }) : null,
+      speaking: false,
+      lastSpoken: "",
+      reviewing: false,
+      mode: dictate ? "dictate" : session.mode,
       startedAt: Date.now(),
       finished: false,
       ended: false,
@@ -93,7 +110,27 @@ export class Interview {
     this.timer = setInterval(() => this.renderClock(), 1000);
     if (this.mode === "text") {
       this.addTurn("interviewer", message);
+      this.renderTextStatus(false);
       this.input.focus();
+      return;
+    }
+    if (this.mode === "dictate") {
+      this.addTurn("interviewer", message);
+      this.renderTextStatus(false);
+      await this.speaker.ready;
+      if (this.ended) return;
+      const notes = [];
+      if (!this.speaker.available) {
+        notes.push(notice("warn", maskIcon(ICONS.alert, 18), "Máy chưa có giọng đọc tiếng Việt",
+          "Câu hỏi chỉ hiện bằng chữ. Trên Edge có sẵn giọng tiếng Việt; trên Windows có thể cài thêm trong Cài đặt › Thời gian và ngôn ngữ › Giọng nói."));
+      }
+      if (!Listener.supported) {
+        notes.push(notice("warn", maskIcon(ICONS.alert, 18), "Trình duyệt chưa nhận dạng được giọng nói",
+          "Hãy mở bằng Chrome hoặc Edge. Trong lúc này bạn gõ câu trả lời."));
+        this.setAnswerMode("text");
+      }
+      this.errorSlot.replaceChildren(...notes);
+      this.askAloud();
       return;
     }
     this.renderVoiceState();
@@ -108,13 +145,13 @@ export class Interview {
     this.teacherBtn = pillButton("Bảng giáo viên", { icon: ICONS.list14, onclick: () => this.toggleTeacher() });
     this.teacherBtn.setAttribute("aria-pressed", "false");
     this.strip.replaceChildren(
-      h("div", { class: "strip-clock" }, img(ICONS.clock16, 16), this.stripClock, `/ ${formatClock(limit, true)}`),
+      h("div", { class: "strip-clock" }, img(ICONS.clock16, 16), this.stripClock, `/ ${formatClock(limit, true)} đã dùng`),
       h("div", { class: "strip-right" },
-        this.teacherBtn,
-        pillButton("Kết thúc", { icon: ICONS.x, onclick: () => this.confirmEnd() })));
+        pillButton("Kết thúc sớm", { icon: ICONS.x, onclick: () => this.confirmEnd() })));
 
-    const column = [];
-    if (this.mode === "voice") column.push(this.buildVoiceCard());
+    this.errorSlot = h("div", { class: "voice-error" });
+    const column = [this.errorSlot, this.buildExaminerCard()];
+    if (this.mode === "voice" || this.mode === "dictate") column.push(this.buildVoiceCard());
     column.push(this.buildChatCard());
     this.doneBox = h("section", { class: "done-box", role: "status", hidden: true },
       h("span", { class: "chip is-success" }, img(ICONS.check, 14), "Buổi phỏng vấn đã kết thúc"),
@@ -132,50 +169,350 @@ export class Interview {
 
     this.root.classList.remove("with-teacher");
     this.root.replaceChildren(h("div", { class: "interview-layout" },
-      h("div", { class: "interview-col" }, column),
+      h("div", { class: "interview-col" }, column.flat()),
       this.teacher));
   }
 
-  buildVoiceCard() {
+  /** Card giám khảo: tên, trạng thái và câu giám khảo vừa nói, chữ lớn như câu hỏi. */
+  buildExaminerCard() {
     this.avatar = h("span", { class: "avatar", "aria-hidden": "true" }, h("span", {}, "M"));
     this.statusSlot = h("div", { class: "status-slot", "aria-live": "polite" });
-    this.waveEl = h("div", { class: "waveform voice-wave", "aria-hidden": "true" }, Array.from({ length: LEVEL_BARS }, () => h("i")));
-    this.errorSlot = h("div", { class: "voice-error" });
-    this.muteBtn = h("button", { type: "button", class: "btn-pill", onclick: () => this.voice && this.voice.setMuted(!this.voice.muted) });
-    const captions = h("input", { type: "checkbox", checked: true, onchange: (event) => this.setCaptions(event.target.checked) });
-    return h("section", { class: "card-lg voice-card" },
+    this.questionEl = h("p", { class: "question-text" },
+      h("span", { class: "placeholder" }, this.mode === "voice" ? "Giám khảo sẽ chào và hỏi câu đầu tiên…" : ""));
+    this.thinkingEl = h("div", { class: "skeleton", "aria-hidden": "true", hidden: true }, h("span"), h("span"), h("span"));
+    const controls = [];
+    if (this.mode === "dictate") {
+      controls.push(pillButton("Nghe lại câu hỏi", { icon: ICONS.replay, onclick: () => this.replayQuestion() }));
+    } else if (this.mode === "voice") {
+      const captions = h("input", { type: "checkbox", checked: true, onchange: (event) => this.setCaptions(event.target.checked) });
+      controls.push(h("label", { class: "check" }, captions, h("span", {}, "Hiện phụ đề")));
+    } else {
+      controls.push(h("span", { class: "note" }, "Gõ câu trả lời của bạn bên dưới."));
+    }
+    this.captionsOff = h("p", { class: "thinking-text", hidden: true }, "Phụ đề đang tắt. Hội thoại vẫn được ghi lại để chấm điểm.");
+    return h("section", { class: "card-lg", "aria-live": "polite" },
       h("div", { class: "examiner-head" },
         h("div", { class: "examiner" }, this.avatar,
-          h("div", { class: "examiner-name" }, h("strong", {}, "Minh · Giám khảo AI"), h("span", {}, `Hỏi theo ${this.session.document_title}`))),
+          h("div", { class: "examiner-name" }, h("strong", {}, "Anh Minh"), h("span", {}, `Hỏi theo ${this.session.document_title}`))),
         this.statusSlot),
-      this.waveEl,
-      this.errorSlot,
-      h("div", { class: "control-row" }, this.muteBtn, h("label", { class: "check" }, captions, h("span", {}, "Hiện phụ đề"))));
+      this.questionEl,
+      this.thinkingEl,
+      this.captionsOff,
+      h("div", { class: "control-row" }, controls));
   }
 
+  /**
+   * Ô trả lời của chế độ giọng nói, có hai cách trả lời đảo qua lại bằng nút bên dưới:
+   * nói (sóng âm micro và lời người học đang nói) hoặc viết (gõ đáp án, sửa lời máy vừa nghe rồi gửi bằng chữ).
+   */
+  buildVoiceCard() {
+    this.listenLabel = h("strong", {}, "Đang kết nối");
+    this.listenDot = h("span", { class: "live" });
+    this.waveEl = h("div", { class: "waveform", "aria-hidden": "true" }, Array.from({ length: LEVEL_BARS }, () => h("i")));
+    this.answerEl = h("p", { class: "transcript", "aria-live": "polite" });
+    this.muteBtn = this.mode === "dictate"
+      ? pillButton("Nói lại", { icon: ICONS.replay, iconSize: 14, className: "btn-pill btn-lg", onclick: () => this.startListening() })
+      : h("button", { type: "button", class: "btn-pill btn-lg", onclick: () => this.voice && this.voice.setMuted(!this.voice.muted) });
+    this.clearAnswer();
+    this.voicePart = h("div", { class: "answer-part" },
+      h("div", { class: "listen-row" }, h("div", { class: "listen-state" }, this.listenDot, this.listenLabel), this.waveEl),
+      this.answerEl);
+
+    // Giọng nói: người học và giám khảo chỉ nói với nhau, không có ô sửa bằng chữ.
+    if (this.mode === "voice") {
+      this.answerCard = h("section", { class: "answer-card is-listening" },
+        this.voicePart,
+        h("hr", { class: "divider" }),
+        h("div", { class: "answer-foot" },
+          h("div", { class: "foot-left" }, img(ICONS.micOn64, 64), h("div", { class: "foot-text" },
+            h("span", {}, "Cứ nói tự nhiên, giám khảo nghe liên tục"),
+            h("span", {}, "Bạn có thể ngắt lời, giám khảo dừng ngay"))),
+          h("div", { class: "foot-buttons" }, this.muteBtn)));
+      return this.answerCard;
+    }
+
+    this.writer = h("textarea", {
+      class: "answer-input",
+      rows: "3",
+      maxlength: "4000",
+      "aria-label": "Viết câu trả lời",
+      placeholder: "Gõ câu trả lời của bạn… (Enter để gửi, Shift + Enter để xuống dòng)",
+      oninput: () => this.renderWriter(),
+      onkeydown: (event) => {
+        if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+          event.preventDefault();
+          this.sendWritten();
+        }
+      },
+    });
+    // Bấm Trả lời lần 1: tắt mic, mở ô sửa lời vừa nói. Bấm Trả lời lần 2 (ở ô viết): nộp câu trả lời.
+    this.answerBtn = pillButton("Trả lời", { icon: ICONS.checkWhite16, iconSize: 16, className: "btn-pill btn-lg btn-solid", onclick: () => this.reviewAnswer() });
+    this.writerSendBtn = pillButton("Trả lời", { icon: ICONS.checkWhite16, iconSize: 16, className: "btn-pill btn-lg btn-solid", onclick: () => this.sendWritten() });
+    const writerNote = this.textInput ? null
+      : h("p", { class: "field-note is-warn" }, "Máy chủ chưa nhận câu trả lời dạng chữ trong chế độ Giọng nói nên chưa nộp được bản sửa. Muốn sửa rồi mới nộp, hãy kết thúc và bắt đầu lại với hình thức \"Nói rồi sửa\".");
+
+    this.writerPart = h("div", { class: "answer-part writer" }, this.writer, writerNote);
+    this.footLeft = h("div", { class: "foot-left" });
+    this.answerMode = "voice";
+    this.mutedBeforeText = false;
+    this.switchBtn = h("button", { type: "button", class: "btn-pill mode-switch", onclick: () => this.setAnswerMode(this.answerMode === "voice" ? "text" : "voice") });
+
+    const card = h("section", { class: "answer-card is-listening" },
+      this.voicePart,
+      this.writerPart,
+      h("hr", { class: "divider" }),
+      h("div", { class: "answer-foot" },
+        this.footLeft,
+        h("div", { class: "foot-buttons" }, this.muteBtn, this.answerBtn, this.writerSendBtn)));
+    this.answerCard = h("div", { class: "flow-actions-col" }, card, this.switchBtn);
+    this.renderAnswerMode();
+    return this.answerCard;
+  }
+
+  /** Đảo giữa trả lời bằng giọng nói và bằng chữ. Lúc viết thì tắt micro, quay lại nói thì trả micro như cũ. */
+  setAnswerMode(mode) {
+    if (mode === this.answerMode) return;
+    this.answerMode = mode;
+    if (mode === "voice") this.reviewing = false;
+    if (this.voice) {
+      if (mode === "text") {
+        this.mutedBeforeText = this.voice.muted;
+        this.voice.setMuted(true);
+      } else {
+        this.voice.setMuted(this.mutedBeforeText);
+      }
+    }
+    if (this.mode === "dictate") {
+      if (mode === "text") {
+        this.listener.stop();
+        this.setDictateStatus(this.reviewing ? "review" : "writing");
+      } else if (!this.speaking && !this.sending && !this.finished) {
+        this.startListening();
+      }
+    }
+    this.renderAnswerMode();
+    if (mode === "text") this.writer.focus();
+  }
+
+  renderAnswerMode() {
+    const writing = this.answerMode === "text";
+    this.voicePart.hidden = writing;
+    this.writerPart.hidden = !writing;
+    this.answerBtn.hidden = writing;
+    this.muteBtn.hidden = writing;
+    this.writerSendBtn.hidden = !writing;
+    this.footLeft.replaceChildren(...(writing
+      ? [h("div", { class: "foot-text" }, ...(this.reviewing
+        ? [h("span", {}, "Sửa chỗ máy nghe nhầm"), h("span", {}, "Bấm Trả lời lần nữa để nộp câu trả lời")]
+        : [h("span", {}, "Bấm Trả lời khi viết xong"), h("span", {}, "Micro đang tắt trong lúc bạn viết")]))]
+      : [img(ICONS.micOn64, 64), h("div", { class: "foot-text" },
+        h("span", {}, this.mode === "dictate" ? "Giám khảo đọc xong câu hỏi thì micro tự bật" : "Cứ nói tự nhiên, giám khảo nghe liên tục"),
+        h("span", {}, "Nói xong thì bấm Trả lời để xem lại và sửa"))]));
+    this.switchBtn.replaceChildren(...(writing
+      ? [maskIcon(ICONS.mic, 14), h("span", {}, "Chuyển sang nói câu trả lời")]
+      : [h("span", {}, "Chuyển sang viết câu trả lời")]));
+    this.renderWriter();
+  }
+
+  renderWriter() {
+    if (!this.writer) return;
+    const state = this.voice ? this.voice.visualState : "connecting";
+    const open = this.mode === "dictate"
+      ? !this.finished && !this.ended && !this.sending
+      : state !== "ended" && state !== "error" && !this.finished;
+    this.writerSendBtn.disabled = !this.textInput || !open || !this.writer.value.trim();
+    this.answerBtn.disabled = !open || !this.lastSpoken;
+    this.switchBtn.disabled = !open;
+  }
+
+  /** Trả lời lần 1: tắt mic, chuyển sang viết và chép lời máy vừa nghe được vào ô viết để người học sửa. */
+  reviewAnswer() {
+    if (!this.lastSpoken) return;
+    this.reviewing = true;
+    this.setAnswerMode("text");
+    this.writer.value = this.lastSpoken;
+    this.writer.focus();
+    this.writer.setSelectionRange(this.writer.value.length, this.writer.value.length);
+    this.renderWriter();
+  }
+
+  sendWritten() {
+    const text = this.writer.value.trim();
+    if (this.mode === "dictate") {
+      if (text) this.submitDictated(text);
+      return;
+    }
+    if (!text || !this.textInput || this.finished || !this.voice) return;
+    if (!this.voice.sendText(text)) {
+      toast("Chưa gửi được vì giọng nói đang mất kết nối. Câu trả lời vẫn được giữ trong ô viết.", "warn");
+      return;
+    }
+    this.writer.value = "";
+    this.appendTranscript("learner", this.bubbles.learner ? ` ${text}` : text);
+    this.renderWriter();
+    // Gửi xong bản sửa của câu vừa nói thì quay lại trả lời bằng giọng nói.
+    if (this.reviewing) {
+      this.setAnswerMode("voice");
+      this.clearAnswer();
+    }
+  }
+
+  // -- Nói rồi sửa -------------------------------------------------------------
+
+  /** Đọc câu hỏi bằng giọng của trình duyệt; đọc xong thì bật nghe (nếu đang trả lời bằng giọng nói). */
+  async askAloud(draft = "") {
+    if (this.ended || this.finished) return;
+    this.listener.stop();
+    this.speaking = true;
+    this.setDictateStatus("speaking");
+    await this.speaker.speak(this.questionEl.textContent);
+    this.speaking = false;
+    if (this.ended || this.finished || this.sending) return;
+    if (this.answerMode === "voice") this.startListening(draft);
+    else this.setDictateStatus(this.reviewing ? "review" : "writing");
+  }
+
+  /** Nghe lại câu hỏi mà không mất phần đã nói. */
+  replayQuestion() {
+    const draft = this.answerMode === "voice" && this.listener.active ? this.listener.text : "";
+    this.askAloud(draft);
+  }
+
+  startListening(draft = "") {
+    if (this.ended || this.finished) return;
+    this.clearAnswer();
+    this.setDictateStatus("listening");
+    this.listener.start();
+    if (draft) {
+      this.listener.final = draft;
+      this.renderDictation();
+    }
+  }
+
+  renderDictation() {
+    const { final, interim } = this.listener;
+    this.lastSpoken = this.listener.text;
+    if (this.lastSpoken) {
+      this.answerEl.replaceChildren(final ? `${final} ` : "", interim ? h("span", { class: "interim" }, interim) : "");
+    }
+    this.renderWriter();
+  }
+
+  renderDictationLevels(levels) {
+    const bars = this.waveEl.children;
+    levels.forEach((value, i) => {
+      if (bars[i]) bars[i].style.height = `${Math.round(4 + Math.min(1, value) * 28)}px`;
+    });
+  }
+
+  onListenError(reason) {
+    const text = reason === "blocked"
+      ? "Trình duyệt đang chặn micro nên bạn gõ câu trả lời thay vì nói."
+      : reason === "no-device"
+        ? "Không tìm thấy micro nên bạn gõ câu trả lời thay vì nói."
+        : "Dịch vụ nhận dạng giọng nói không phản hồi nên bạn gõ câu trả lời thay vì nói.";
+    toast(text, "warn");
+    this.setAnswerMode("text");
+  }
+
+  setDictateStatus(phase) {
+    const chips = {
+      speaking: () => h("span", { class: "chip chip-solid status-chip" },
+        h("span", { class: "wave-mini", "aria-hidden": "true" }, h("i"), h("i"), h("i"), h("i"), h("i")), "Đang đọc câu hỏi"),
+      listening: () => h("span", { class: "chip is-success status-chip" }, img(ICONS.dot, 6, "live-dot"), "Đang nghe bạn nói"),
+      review: () => h("span", { class: "chip is-warn status-chip" }, "Đang chờ bạn sửa câu trả lời"),
+      writing: () => h("span", { class: "chip is-success status-chip" }, img(ICONS.dot, 6), "Đang chờ bạn trả lời"),
+    };
+    this.statusSlot.replaceChildren(chips[phase]());
+    this.avatar.classList.toggle("is-speaking", phase === "speaking");
+    this.listenLabel.textContent = phase === "speaking" ? "Giám khảo đang đọc câu hỏi" : "Đang nghe";
+    this.listenDot.hidden = phase !== "listening";
+  }
+
+  /** Trả lời lần 2: nộp câu đã sửa qua phiên nhắn tin, rồi đọc câu hỏi tiếp theo. */
+  async submitDictated(text) {
+    if (this.sending || this.finished) return;
+    this.listener.stop();
+    this.writer.value = "";
+    const ok = await this.postAnswer(text);
+    if (this.ended) return;
+    if (!ok) {
+      this.writer.value = text;
+      this.renderWriter();
+      this.setDictateStatus(this.reviewing ? "review" : "writing");
+      return;
+    }
+    if (this.finished) {
+      this.speaker.speak(this.questionEl.textContent);
+      return;
+    }
+    if (this.reviewing) {
+      // Nộp xong bản sửa thì quay lại nói; micro bật sau khi đọc xong câu hỏi mới.
+      this.reviewing = false;
+      this.answerMode = "voice";
+      this.renderAnswerMode();
+    }
+    this.askAloud();
+  }
+
+  /** Lịch sử hội thoại; ở chế độ nhắn tin thì kèm ô trả lời. */
   buildChatCard() {
     this.chat = h("div", { class: "chat", "aria-live": "polite" });
-    this.captionsOff = h("p", { class: "muted", hidden: true }, "Phụ đề đang tắt. Hội thoại vẫn được ghi lại để chấm điểm.");
-    const parts = [h("p", { class: "label-caps" }, this.mode === "voice" ? "Phụ đề hội thoại" : "Hội thoại"), this.captionsOff, this.chat];
-    if (this.mode === "text") {
-      this.input = h("textarea", {
-        class: "answer-input",
-        rows: "3",
-        maxlength: "4000",
-        "aria-label": "Câu trả lời của bạn",
-        placeholder: "Nhập câu trả lời… (Enter để gửi, Shift + Enter để xuống dòng)",
-        onkeydown: (event) => {
-          if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
-            event.preventDefault();
-            this.sendMessage();
-          }
-        },
-      });
-      this.sendBtn = pillButton("Gửi", { icon: ICONS.checkWhite16, iconSize: 16, className: "btn-pill btn-lg btn-solid", onclick: () => this.sendMessage() });
-      this.composer = h("div", { class: "composer" }, this.input, this.sendBtn);
-      parts.push(this.composer);
+    // Theo thiết kế không hiện lịch sử; khung vẫn giữ vì hội thoại được ghi vào đây.
+    const history = h("section", { class: "card-lg chat-card", hidden: true },
+      h("p", { class: "label-caps" }, this.mode === "voice" ? "Phụ đề hội thoại" : "Hội thoại"), this.chat);
+    if (this.mode !== "text") return history;
+
+    this.input = h("textarea", {
+      class: "answer-input",
+      rows: "4",
+      maxlength: "4000",
+      "aria-label": "Câu trả lời của bạn",
+      placeholder: "Gõ câu trả lời… (Enter để gửi, Shift + Enter để xuống dòng)",
+      onkeydown: (event) => {
+        if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+          event.preventDefault();
+          this.sendMessage();
+        }
+      },
+    });
+    this.sendBtn = pillButton("Gửi", { icon: ICONS.checkWhite16, iconSize: 16, className: "btn-pill btn-lg btn-solid", onclick: () => this.sendMessage() });
+    const clearBtn = pillButton("Xoá", { icon: ICONS.replay, iconSize: 14, className: "btn-pill btn-lg", onclick: () => {
+      this.input.value = "";
+      this.input.focus();
+    } });
+    this.composer = h("section", { class: "answer-card is-listening" },
+      this.input,
+      h("hr", { class: "divider" }),
+      h("div", { class: "answer-foot" },
+        h("div", { class: "foot-text" }, h("span", {}, "Bấm Gửi khi trả lời xong"), h("span", {}, "Shift + Enter để xuống dòng")),
+        h("div", { class: "foot-buttons" }, clearBtn, this.sendBtn)));
+    return [this.composer, history];
+  }
+
+  clearAnswer() {
+    this.lastSpoken = "";
+    this.renderWriter();
+    if (this.answerEl) this.answerEl.replaceChildren(h("span", { class: "placeholder" }, "Bắt đầu nói câu trả lời của bạn…"));
+  }
+
+  /** Hiện câu giám khảo vừa nói ở card giám khảo và lời người học ở ô trả lời. */
+  showTurn(role, text) {
+    if (role === "interviewer") {
+      this.questionEl.textContent = text;
+      return;
     }
-    return h("section", { class: "card-lg chat-card" }, parts);
+    if (this.answerEl) this.answerEl.textContent = text;
+    this.lastSpoken = text;
+    this.renderWriter();
+  }
+
+  renderTextStatus(thinking) {
+    this.statusSlot.replaceChildren(thinking
+      ? h("span", { class: "chip status-chip", style: "color: var(--ink); font-weight: 600" }, img(ICONS.loader14, 14, "spin"), "Đang suy nghĩ")
+      : h("span", { class: "chip is-success status-chip" }, img(ICONS.dot, 6), "Đang chờ bạn trả lời"));
+    this.questionEl.hidden = thinking;
+    this.thinkingEl.hidden = !thinking;
   }
 
   // -- Hội thoại ---------------------------------------------------------------
@@ -190,6 +527,7 @@ export class Interview {
     if (role === "learner") this.learnerTurns += 1;
     this.chat.append(turn);
     this.scrollChat();
+    if (text) this.showTurn(role, text);
     return turn;
   }
 
@@ -200,9 +538,13 @@ export class Interview {
       turn = this.addTurn(role, "");
       // Lời người học thuộc về lượt hiện tại nên luôn đứng trước câu trả lời của AI trong cùng lượt.
       if (role === "learner" && this.bubbles.interviewer) this.chat.insertBefore(turn, this.bubbles.interviewer);
+      // Câu hỏi mới mà người học chưa nói gì trong lượt này thì làm trống ô trả lời.
+      if (role === "interviewer" && !this.bubbles.learner) this.clearAnswer();
       this.bubbles[role] = turn;
     }
-    turn.querySelector(".turn-text").textContent += text;
+    const turnText = turn.querySelector(".turn-text");
+    turnText.textContent += text;
+    this.showTurn(role, turnText.textContent);
     this.scrollChat();
   }
 
@@ -213,6 +555,8 @@ export class Interview {
 
   setCaptions(on) {
     this.chat.hidden = !on;
+    this.questionEl.hidden = !on;
+    if (this.answerEl) this.answerEl.hidden = !on;
     this.captionsOff.hidden = on;
     if (on) this.scrollChat();
   }
@@ -220,31 +564,42 @@ export class Interview {
   async sendMessage() {
     const text = this.input.value.trim();
     if (!text || this.sending || this.finished) return;
-    this.sending = true;
     this.sendBtn.disabled = true;
     this.input.value = "";
+    const ok = await this.postAnswer(text);
+    // Máy chủ không lưu lượt bị lỗi nên trả lại nội dung để người học gửi lại.
+    if (!ok && !this.ended) this.input.value = text;
+    this.sendBtn.disabled = false;
+    if (!this.finished && !this.ended) this.input.focus();
+  }
+
+  /** Gửi câu trả lời qua phiên nhắn tin. Lỗi thì bỏ lượt vừa thêm và trả về false. */
+  async postAnswer(text) {
+    this.sending = true;
+    this.renderWriter();
     const turn = this.addTurn("learner", text);
     const typing = h("div", { class: "typing", "aria-label": "Giám khảo đang soạn câu trả lời" }, h("span"), h("span"), h("span"));
     this.chat.append(typing);
     this.scrollChat();
+    this.renderTextStatus(true);
     try {
       const result = await api.sendAnswer(this.session.id, text);
-      if (this.ended) return;
+      if (this.ended) return false;
       typing.remove();
       this.addTurn("interviewer", result.message);
       if (result.finished) this.markFinished();
+      return true;
     } catch (error) {
-      // Máy chủ không lưu lượt bị lỗi nên trả lại nội dung để người học gửi lại.
       typing.remove();
       turn.remove();
       this.learnerTurns -= 1;
-      this.input.value = text;
       if (error.status === 409) this.markFinished();
       toast(error.message);
+      return false;
     } finally {
       this.sending = false;
-      this.sendBtn.disabled = false;
-      if (!this.finished && !this.ended) this.input.focus();
+      this.renderTextStatus(false);
+      this.renderWriter();
       this.refreshInsights();
     }
   }
@@ -256,7 +611,7 @@ export class Interview {
     if (!voice || !this.statusSlot || this.mode !== "voice") return;
     const state = voice.visualState;
     this.avatar.classList.toggle("is-speaking", state === "speaking");
-    this.muteBtn.replaceChildren(img(voice.muted ? ICONS.mic : ICONS.micOff14, 14), h("span", {}, voice.muted ? "Bật mic" : "Tắt mic"));
+    this.muteBtn.replaceChildren(voice.muted ? maskIcon(ICONS.mic, 14) : img(ICONS.micOff14, 14), h("span", {}, voice.muted ? "Bật mic" : "Tắt mic"));
     this.muteBtn.setAttribute("aria-pressed", String(voice.muted));
     this.muteBtn.disabled = state === "ended" || state === "error";
 
@@ -265,7 +620,12 @@ export class Interview {
     if (key !== this.statusKey) {
       this.statusKey = key;
       this.statusSlot.replaceChildren(statusChip(state, label));
+      const listening = state === "listening";
+      this.listenLabel.textContent = listening ? (this.learnerSpeaking ? "Bạn đang nói" : "Đang nghe")
+        : state === "speaking" ? "Giám khảo đang nói" : label;
+      this.listenDot.hidden = !listening;
     }
+    this.renderWriter();
     this.errorSlot.replaceChildren(voice.error ? notice("danger", img(ICONS.alert, 18), "Giọng nói gặp lỗi", voice.error) : "");
   }
 
@@ -299,7 +659,9 @@ export class Interview {
     if (this.finished || !this.session) return;
     this.finished = true;
     clearInterval(this.timer);
+    if (this.listener) this.listener.stop();
     if (this.composer) this.composer.hidden = true;
+    if (this.answerCard) this.answerCard.hidden = true;
     this.doneBox.hidden = false;
     this.refreshInsights();
   }
@@ -313,7 +675,7 @@ export class Interview {
     if (this.ended || !this.session) return;
     const usedSeconds = (Date.now() - this.startedAt) / 1000;
     this.dispose();
-    this.onFinish({ session: this.session, answered: this.learnerTurns, usedSeconds });
+    this.onFinish({ session: this.session, answered: this.learnerTurns, usedSeconds, dictate: this.mode === "dictate" });
   }
 
   /** Dừng hẳn: tắt giọng nói và các bộ đếm. */
@@ -322,6 +684,8 @@ export class Interview {
     clearInterval(this.timer);
     clearInterval(this.insightsTimer);
     if (this.voice) this.voice.stop();
+    if (this.listener) this.listener.stop();
+    if (this.speaker) this.speaker.stop();
     if (this.dialog.open) this.dialog.close();
   }
 

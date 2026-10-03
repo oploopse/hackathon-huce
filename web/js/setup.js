@@ -11,6 +11,7 @@ const IMPORTANCE = { 3: "Cốt lõi", 2: "Quan trọng", 1: "Bổ trợ" };
 const LEVEL_ON = 0.15;
 const MODE_NOTES = {
   voice: "Trò chuyện real-time với giám khảo AI bằng giọng nói qua Gemini Live. Bạn có thể ngắt lời, AI dừng ngay.",
+  dictate: "Giám khảo đọc câu hỏi, bạn nói câu trả lời rồi bấm Trả lời để xem lại và sửa chữ máy nghe nhầm, bấm Trả lời lần nữa để nộp. Cần Chrome hoặc Edge.",
   text: "Trả lời bằng cách gõ phím. Cùng bộ não chấm điểm, tiện để thử mà không tốn quota giọng nói.",
 };
 const MIC_PROBLEMS = {
@@ -293,7 +294,7 @@ function renderMode() {
   for (const option of els.modeOptions) option.setAttribute("aria-pressed", String(option.dataset.mode === state.mode));
   els.modeNote.textContent = MODE_NOTES[state.mode];
   els.bargeInRow.hidden = state.mode !== "voice";
-  els.micField.hidden = state.mode !== "voice";
+  els.micField.hidden = state.mode === "text";
   const minutes = state.health && state.health.interview_minutes;
   els.timeLimitHint.textContent = minutes ? `Tối đa ${formatClock(minutes * 60)} mỗi buổi` : "";
 }
@@ -368,7 +369,7 @@ function renderCta() {
   els.submit.setAttribute("aria-disabled", String(Boolean(problem) || state.starting));
   els.submit.setAttribute("aria-busy", String(state.starting));
   els.submit.querySelector("span").textContent = state.starting ? "Đang chuẩn bị…" : "Bắt đầu phỏng vấn";
-  let note = state.mode === "voice"
+  let note = state.mode !== "text"
     ? "Trình duyệt sẽ xin quyền dùng micro khi bắt đầu. Giám khảo AI sẽ chào và hỏi câu đầu tiên."
     : "Giám khảo AI sẽ gửi câu hỏi đầu tiên ngay khi bắt đầu.";
   if (problem) note = problem.message;
@@ -443,7 +444,7 @@ function setupMode() {
   for (const option of els.modeOptions) {
     option.addEventListener("click", () => {
       state.mode = option.dataset.mode;
-      if (state.mode !== "voice") mic.stop();
+      if (state.mode === "text") mic.stop();
       render();
     });
   }

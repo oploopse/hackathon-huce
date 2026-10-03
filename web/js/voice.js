@@ -77,6 +77,13 @@ export class VoiceClient {
     this.handlers.onState();
   }
 
+  /** Gửi câu trả lời dạng chữ (gõ tay hoặc sửa lại lời vừa nói). Cần backend hỗ trợ, xem web/API_CONTRACT.md. */
+  sendText(text) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || this.connection !== "connected") return false;
+    this.ws.send(JSON.stringify({ type: "text", text }));
+    return true;
+  }
+
   setPlaying(playing) {
     this.playing = playing;
     this.syncMic();

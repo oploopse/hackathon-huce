@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="/css/setup.css">
   <link rel="stylesheet" href="/css/flow.css">
   <script type="module" src="/js/main.js"></script>
+  <script type="module" src="/js/setup-display.js"></script>
 </head>
 <body>
   <header class="app-header">
@@ -76,6 +77,73 @@
         </div>
       </section>
 
+      <section class="field" id="field-range" aria-labelledby="range-title">
+        <div class="field-head">
+          <h2 id="range-title">Phạm vi trang</h2>
+          <span class="chip" id="range-chip" hidden></span>
+        </div>
+        <div class="panel range-panel">
+          <div class="range-inputs">
+            <div class="text-field" id="page-from-field">
+              <label for="page-from">Từ trang</label>
+              <input id="page-from" type="text" inputmode="numeric" autocomplete="off" maxlength="5" disabled aria-describedby="page-from-error">
+              <p class="text-field-error" id="page-from-error" hidden></p>
+            </div>
+            <span class="range-dash" aria-hidden="true">–</span>
+            <div class="text-field" id="page-to-field">
+              <label for="page-to">Đến trang</label>
+              <input id="page-to" type="text" inputmode="numeric" autocomplete="off" maxlength="5" disabled aria-describedby="page-to-error">
+              <p class="text-field-error" id="page-to-error" hidden></p>
+            </div>
+          </div>
+          <div class="coverage">
+            <div class="coverage-text">
+              <span id="coverage-total">Chưa có tài liệu</span>
+              <strong id="coverage-range"></strong>
+            </div>
+            <div class="coverage-bar" aria-hidden="true"><span id="coverage-fill" hidden></span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="field" aria-labelledby="questions-title">
+        <div class="field-head">
+          <h2 id="questions-title">Số câu hỏi</h2>
+          <span class="field-hint">Kéo để chọn từ 5 đến 10 câu, tính cả câu hỏi đào sâu</span>
+        </div>
+        <div class="panel slider-panel">
+          <div class="slider-head">
+            <p class="slider-value"><output id="questions-output" for="questions">5</output><span>câu</span></p>
+          </div>
+          <input type="range" class="slider" id="questions" min="5" max="10" step="1" value="5" aria-labelledby="questions-title">
+          <div class="slider-scale" id="questions-scale" aria-hidden="true"></div>
+        </div>
+      </section>
+
+      <section class="field" aria-labelledby="duration-title">
+        <div class="field-head">
+          <h2 id="duration-title">Thời gian phỏng vấn</h2>
+          <span class="field-hint">Tổng thời gian cho cả buổi, từ 5 đến 15 phút</span>
+        </div>
+        <div class="panel slider-panel">
+          <div class="slider-head">
+            <p class="slider-value"><output id="duration-output" for="duration">15:00</output><span>cho cả buổi</span></p>
+            <div class="presets" role="group" aria-label="Chọn nhanh thời gian phỏng vấn">
+              <button type="button" class="preset duration-preset" data-minutes="5" aria-pressed="false" aria-label="5 phút">5:00</button>
+              <button type="button" class="preset duration-preset" data-minutes="10" aria-pressed="false" aria-label="10 phút">10:00</button>
+              <button type="button" class="preset duration-preset" data-minutes="15" aria-pressed="true" aria-label="15 phút">15:00</button>
+            </div>
+          </div>
+          <input type="range" class="slider" id="duration" min="5" max="15" step="1" value="15" aria-labelledby="duration-title">
+          <div class="slider-ends" aria-hidden="true"><span>5:00</span><span>15:00</span></div>
+          <p class="panel-note">
+            <img src="/assets/icons/clock.svg" width="14" height="14" alt="">
+            <span>Hết giờ thì phần đã nói được tự gửi và buổi phỏng vấn chuyển sang chấm điểm.</span>
+          </p>
+        </div>
+        <p class="field-note" id="duration-summary"></p>
+      </section>
+
       <section class="field" aria-labelledby="learner-title">
         <div class="field-head">
           <h2 id="learner-title">Tên người học</h2>
@@ -93,6 +161,7 @@
         <div class="panel mode-panel">
           <div class="presets" role="group" aria-labelledby="mode-title">
             <button type="button" class="preset mode-option" data-mode="voice" aria-pressed="true">Giọng nói</button>
+            <button type="button" class="preset mode-option" data-mode="dictate" aria-pressed="false">Nói rồi sửa</button>
             <button type="button" class="preset mode-option" data-mode="text" aria-pressed="false">Nhắn tin</button>
           </div>
           <p class="panel-note" id="mode-note"></p>
