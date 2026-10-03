@@ -3,146 +3,165 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AI Interviewer</title>
-  <link rel="stylesheet" href="/styles.css">
+  <title>Socratic Exam</title>
+  <link rel="icon" href="/assets/icons/logo.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+  <link rel="stylesheet" href="/css/theme.css">
+  <link rel="stylesheet" href="/css/setup.css">
+  <link rel="stylesheet" href="/css/flow.css">
+  <script type="module" src="/js/main.js"></script>
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span>AI Interviewer</span></div>
-    <div id="health" class="pill">Đang kiểm tra…</div>
+  <header class="app-header">
+    <a class="brand" href="/">
+      <img src="/assets/icons/logo.svg" width="32" height="32" alt="">
+      <span>Socratic Exam</span>
+    </a>
+    <ol class="stepper" id="stepper" aria-label="Các bước của buổi phỏng vấn">
+      <li class="step is-current" aria-current="step"><span class="step-num">1</span><span class="step-label">Thiết lập</span></li>
+      <li class="step"><span class="step-num">2</span><span class="step-label">Phỏng vấn</span></li>
+      <li class="step"><span class="step-num">3</span><span class="step-label">Kết quả</span></li>
+    </ol>
+    <div class="app-header-side"><span class="chip header-chip" id="header-chip" hidden></span></div>
   </header>
 
-  <main class="container">
-    <section id="view-setup" class="view">
-      <div class="intro">
-        <h1>Phỏng vấn để biết người học có thực sự hiểu bài</h1>
-        <p>Tải tài liệu lên, AI sẽ soạn câu hỏi, trò chuyện với người học, hỏi sâu khi cần và đánh giá ngầm trong suốt buổi.</p>
-      </div>
+  <div class="progress-strip" id="progress-strip" hidden></div>
 
-      <div class="setup-grid">
-        <div class="card">
-          <div class="card-head"><span class="step">1</span><h2>Tài liệu</h2></div>
-          <label id="dropzone" class="dropzone">
-            <input id="file-input" type="file" accept=".pdf,.docx,.txt,.md" hidden>
-            <strong>Kéo thả file vào đây</strong>
-            <span>hoặc bấm để chọn · PDF, DOCX, TXT, MD</span>
+  <main class="setup view" id="view-setup">
+    <div class="page-title">
+      <h1>Thiết lập buổi phỏng vấn</h1>
+      <p>Tải tài liệu lên, AI sẽ soạn câu hỏi, trò chuyện với bạn, hỏi sâu khi cần và đánh giá ngầm trong suốt buổi.</p>
+    </div>
+
+    <form id="setup-form" class="setup-form" novalidate>
+      <section class="field" id="field-document" aria-labelledby="document-title">
+        <div class="field-head">
+          <h2 id="document-title">Tài liệu</h2>
+          <span class="field-hint">PDF, DOCX, TXT hoặc MD</span>
+        </div>
+
+        <div class="dropzone" id="dropzone">
+          <input id="file-input" class="visually-hidden" type="file" accept=".pdf,.docx,.txt,.md">
+          <span class="dropzone-icon"><img src="/assets/icons/upload.svg" width="22" height="22" alt=""></span>
+          <label class="dropzone-title" for="file-input">Kéo thả file vào đây, hoặc chọn file từ máy</label>
+          <p class="dropzone-sub">Giáo trình, slide bài giảng hoặc tài liệu kỹ thuật</p>
+          <div class="dropzone-actions">
+            <button type="button" class="btn-pill" data-action="use-sample">
+              <img src="/assets/icons/file.svg" width="14" height="14" alt="">
+              <span>Dùng file mẫu: Mang_may_tinh_Chuong3.pdf</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="document-status" id="document-status" aria-live="polite"></div>
+
+        <div class="doc-list-wrap" id="doc-list-wrap" hidden>
+          <p class="label-caps">Tài liệu đã tải</p>
+          <ul class="doc-list" id="doc-list"></ul>
+        </div>
+      </section>
+
+      <section class="field" id="field-concepts" aria-labelledby="concepts-title" hidden>
+        <div class="field-head">
+          <h2 id="concepts-title">Các chủ đề sẽ hỏi</h2>
+          <span class="chip" id="concept-count"></span>
+        </div>
+        <div class="panel doc-detail">
+          <h3 class="doc-detail-title" id="doc-title"></h3>
+          <p class="doc-detail-summary" id="doc-summary"></p>
+          <p class="field-note is-warn" id="doc-truncated" hidden>Tài liệu dài nên chỉ phần đầu được dùng để soạn câu hỏi.</p>
+          <ul class="concept-list" id="concept-list"></ul>
+        </div>
+      </section>
+
+      <section class="field" aria-labelledby="learner-title">
+        <div class="field-head">
+          <h2 id="learner-title">Tên người học</h2>
+        </div>
+        <div class="text-field is-wide">
+          <input id="learner-name" type="text" maxlength="60" placeholder="Ví dụ: Lan" autocomplete="off" aria-labelledby="learner-title">
+        </div>
+      </section>
+
+      <section class="field" aria-labelledby="mode-title">
+        <div class="field-head">
+          <h2 id="mode-title">Hình thức</h2>
+          <span class="field-hint" id="time-limit-hint"></span>
+        </div>
+        <div class="panel mode-panel">
+          <div class="presets" role="group" aria-labelledby="mode-title">
+            <button type="button" class="preset mode-option" data-mode="voice" aria-pressed="true">Giọng nói</button>
+            <button type="button" class="preset mode-option" data-mode="text" aria-pressed="false">Nhắn tin</button>
+          </div>
+          <p class="panel-note" id="mode-note"></p>
+          <label class="check" id="barge-in-row">
+            <input type="checkbox" id="barge-in" checked>
+            <span>Cho phép ngắt lời AI. Nên đeo tai nghe, nếu không AI có thể nghe thấy chính giọng của nó.</span>
           </label>
-          <div id="upload-status" class="upload-status" hidden></div>
-          <div id="doc-list-head" class="list-head" hidden>Tài liệu đã tải</div>
-          <ul id="doc-list" class="doc-list"></ul>
         </div>
+      </section>
 
-        <div class="card">
-          <div class="card-head"><span class="step">2</span><h2>Bắt đầu phỏng vấn</h2></div>
-          <p id="doc-empty" class="empty">Chọn hoặc tải một tài liệu để xem các chủ đề sẽ được hỏi.</p>
-          <div id="doc-detail" hidden>
-            <h3 id="doc-title" class="doc-title"></h3>
-            <p id="doc-summary" class="muted"></p>
-            <p id="doc-truncated" class="notice" hidden>Tài liệu dài nên chỉ phần đầu được dùng để soạn câu hỏi.</p>
-            <div class="list-head">Các chủ đề sẽ hỏi</div>
-            <ul id="concept-list" class="concept-list"></ul>
-
-            <form id="start-form" class="start-form">
-              <label class="field">
-                <span>Tên người học</span>
-                <input id="learner-name" maxlength="60" placeholder="Ví dụ: Lan" autocomplete="off">
-              </label>
-              <div class="field">
-                <span>Hình thức</span>
-                <div class="segmented" role="radiogroup" aria-label="Hình thức phỏng vấn">
-                  <button type="button" class="seg active" data-mode="voice" role="radio" aria-checked="true">Giọng nói</button>
-                  <button type="button" class="seg" data-mode="text" role="radio" aria-checked="false">Nhắn tin</button>
-                </div>
-              </div>
-              <label class="check" id="barge-in-row">
-                <input type="checkbox" id="barge-in" checked>
-                <span>Cho phép ngắt lời AI. Nên đeo tai nghe, nếu không AI có thể nghe thấy chính giọng của nó.</span>
-              </label>
-              <button type="submit" class="btn primary wide" id="start-btn">Bắt đầu phỏng vấn</button>
-            </form>
+      <section class="field" id="field-mic" aria-labelledby="mic-title">
+        <div class="field-head">
+          <h2 id="mic-title">Kiểm tra micro</h2>
+          <span class="chip" id="mic-chip">Chưa kiểm tra</span>
+        </div>
+        <div class="panel mic-panel" id="mic-panel">
+          <span class="mic-badge" id="mic-badge" aria-hidden="true">
+            <span class="icon" style="--icon: url('/assets/icons/mic.svg'); --size: 24px"></span>
+          </span>
+          <div class="mic-body">
+            <p class="mic-device"><strong id="mic-device">Micro của bạn</strong><span id="mic-device-note">· chưa kiểm tra</span></p>
+            <div class="level" id="mic-level" aria-hidden="true"></div>
+            <p class="mic-say" id="mic-say" aria-live="polite"></p>
           </div>
+          <button type="button" class="btn-pill" id="mic-start"></button>
         </div>
-      </div>
-    </section>
-
-    <section id="view-interview" class="view" hidden>
-      <div class="interview-grid" id="interview-grid">
-        <div class="card stage">
-          <div class="stage-head">
-            <div>
-              <div class="stage-title" id="stage-title"></div>
-              <div class="muted small"><span id="timer">00:00</span> / <span id="time-limit">15:00</span></div>
-            </div>
-            <div class="stage-actions">
-              <button class="btn ghost" id="toggle-teacher" type="button" aria-pressed="false">Bảng giáo viên</button>
-              <button class="btn danger" id="end-btn" type="button">Kết thúc</button>
+        <div class="mic-problem" id="mic-problem" hidden>
+          <div class="notice is-warn" role="alert">
+            <span class="icon" id="mic-problem-icon"></span>
+            <div class="notice-text">
+              <p class="notice-title" id="mic-problem-title"></p>
+              <p class="notice-body" id="mic-problem-body"></p>
             </div>
           </div>
-
-          <div id="voice-stage" class="voice-stage" hidden>
-            <div class="orb" id="orb" data-state="connecting" aria-hidden="true">
-              <span class="orb-ring"></span>
-              <span class="orb-core"></span>
-            </div>
-            <div class="orb-label" id="orb-label">Đang kết nối…</div>
-            <div class="voice-controls">
-              <button class="btn ghost" id="mute-btn" type="button" aria-pressed="false">Tắt mic</button>
-              <label class="check small"><input type="checkbox" id="show-captions" checked><span>Hiện phụ đề</span></label>
-            </div>
-          </div>
-
-          <div id="chat" class="chat" aria-live="polite"></div>
-
-          <div id="finished-banner" class="finished" hidden>
-            <span>Buổi phỏng vấn đã kết thúc.</span>
-            <button class="btn primary" id="report-btn" type="button">Xem báo cáo</button>
-          </div>
-
-          <form id="chat-form" class="composer" hidden>
-            <textarea id="chat-input" rows="2" placeholder="Nhập câu trả lời… (Enter để gửi, Shift+Enter để xuống dòng)"></textarea>
-            <button class="btn primary" type="submit" id="send-btn">Gửi</button>
-          </form>
+          <button type="button" class="btn-pill" id="mic-retry">
+            <img src="/assets/icons/replay.svg" width="14" height="14" alt="">
+            <span>Thử lại</span>
+          </button>
         </div>
+      </section>
 
-        <aside class="card teacher" id="teacher-panel" hidden>
-          <div class="teacher-head"><h3>Đánh giá ngầm</h3><span class="tag">Chỉ giáo viên</span></div>
-          <div id="progress-list" class="progress-list"></div>
-          <h4>Lượt chấm gần nhất</h4>
-          <div id="eval-list" class="eval-list"></div>
-        </aside>
+      <div class="cta">
+        <button type="submit" class="btn-primary" id="submit-btn" aria-describedby="cta-note">
+          <span>Bắt đầu phỏng vấn</span>
+          <img class="when-enabled" src="/assets/icons/arrow-right.svg" width="18" height="18" alt="">
+          <img class="when-disabled" src="/assets/icons/arrow-right-faint.svg" width="18" height="18" alt="">
+        </button>
+        <p class="cta-note" id="cta-note" aria-live="polite"></p>
       </div>
-    </section>
-
-    <section id="view-report" class="view" hidden>
-      <div id="report-loading" class="card loading-card" hidden>
-        <div class="spinner"></div>
-        <p id="report-loading-text">Đang tổng hợp báo cáo…</p>
-        <button class="btn ghost" id="report-retry" type="button" hidden>Thử lại</button>
-      </div>
-
-      <div id="report" hidden>
-        <div class="card report-hero">
-          <div class="score-ring" id="score-ring">
-            <span id="score-value">0</span><small>/100</small>
-          </div>
-          <div class="hero-text">
-            <span class="level-badge" id="overall-level"></span>
-            <h2 id="report-title"></h2>
-            <p class="muted" id="report-meta"></p>
-          </div>
-        </div>
-        <div class="tabs" role="tablist">
-          <button class="tab active" data-tab="learner" role="tab" aria-selected="true">Cho người học</button>
-          <button class="tab" data-tab="teacher" role="tab" aria-selected="false">Cho giáo viên</button>
-        </div>
-        <div id="tab-learner" class="tab-panel" role="tabpanel"></div>
-        <div id="tab-teacher" class="tab-panel" role="tabpanel" hidden></div>
-        <div class="report-actions"><button class="btn ghost" id="restart-btn" type="button">Phỏng vấn buổi mới</button></div>
-      </div>
-    </section>
+    </form>
   </main>
 
-  <div id="toast" class="toast" role="status" hidden></div>
-  <script type="module" src="/app.js"></script>
+  <main class="interview-main view" id="view-interview" hidden></main>
+  <main class="center-view view" id="view-grading" hidden></main>
+  <main class="result-main view" id="view-result" hidden></main>
+
+  <dialog class="confirm-dialog" id="confirm-end" aria-labelledby="confirm-end-title">
+    <h2 id="confirm-end-title">Kết thúc buổi phỏng vấn?</h2>
+    <p id="confirm-end-text">Giám khảo sẽ chấm dựa trên phần bạn đã trả lời.</p>
+    <div class="flow-actions">
+      <button type="button" class="btn-pill" value="cancel" id="confirm-end-cancel">Tiếp tục phỏng vấn</button>
+      <button type="button" class="btn-pill btn-solid" value="end" id="confirm-end-ok">Kết thúc và chấm</button>
+    </div>
+  </dialog>
+
+  <footer class="app-footer" id="app-footer">
+    <p>© 2026 Socratic Exam · Hackathon CNTT 2026 · Khoa CNTT, Trường Đại học Xây dựng Hà Nội</p>
+  </footer>
+
+  <div class="toast" id="toast" role="status" hidden></div>
 </body>
 </html>

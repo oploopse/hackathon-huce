@@ -1,10 +1,11 @@
 import asyncio
 import logging
+import secrets
 from contextlib import asynccontextmanager
 from typing import Literal
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket
-from fastapi.responses import JSONResponse
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -58,6 +59,39 @@ class SessionCreate(BaseModel):
 
 class AnswerIn(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
+
+
+class LoginIn(BaseModel):
+    token: str = Field(min_length=1, max_length=256)
+
+
+def _require_access(request: Request) -> None:
+    """Require the configured bearer token when one is configured."""
+    expected = settings.app_access_token
+    if not expected:
+        return
+    authorization = request.headers.get("authorization", "")
+    supplied = authorization.removeprefix("Bearer ").strip() or request.cookies.get("app_access_token", "")
+    if not secrets.compare_digest(supplied, expected):
+        raise HTTPException(401, "Cần đăng nhập để sử dụng ứng dụng")
+
+
+def _access_dependency(request: Request) -> None:
+    _require_access(request)
+
+
+@app.post("/api/auth/login")
+def login(body: LoginIn, request: Request, response: Response) -> dict:
+    if not settings.app_access_token or not secrets.compare_digest(body.token, settings.app_access_token):
+        raise HTTPException(401, "Token đăng nhập không hợp lệ")
+    response.set_cookie(
+        "app_access_token",
+        body.token,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="lax",
+    )
+    return {"ok": True}
 
 
 def _document_or_404(doc_id: str) -> DocumentRecord:
@@ -118,7 +152,7 @@ def health() -> dict:
 
 
 @app.post("/api/documents")
-async def upload_document(file: UploadFile = File(...)) -> dict:
+async def upload_document(file: UploadFile = File(...), _: None = Depends(_access_dependency)) -> dict:
     filename = file.filename or "tai-lieu.txt"
     if not any(filename.lower().endswith(ext) for ext in SUPPORTED_EXTENSIONS):
         raise HTTPException(400, "Chỉ hỗ trợ file PDF, DOCX, TXT hoặc MD")
@@ -156,18 +190,18 @@ async def upload_document(file: UploadFile = File(...)) -> dict:
 
 
 @app.get("/api/documents")
-def list_documents() -> list[dict]:
+def list_documents(_: None = Depends(_access_dependency)) -> list[dict]:
     return [document_summary(doc) for doc in store.list_documents()]
 
 
 @app.get("/api/documents/{doc_id}")
-def get_document(doc_id: str) -> dict:
+def get_document(doc_id: str, _: None = Depends(_access_dependency)) -> dict:
     doc = _document_or_404(doc_id)
     return {**document_summary(doc), "knowledge_map": doc.knowledge_map.model_dump()}
 
 
 @app.post("/api/sessions")
-async def create_session(body: SessionCreate) -> dict:
+async def create_session(body: SessionCreate, _: None = Depends(_access_dependency)) -> dict:
     doc = _document_or_404(body.document_id)
     learner_name = body.learner_name.strip() or "bạn"
     if body.mode == "text":
@@ -178,13 +212,13 @@ async def create_session(body: SessionCreate) -> dict:
 
 
 @app.get("/api/sessions/{session_id}")
-def get_session(session_id: str) -> dict:
+def get_session(session_id: str, _: None = Depends(_access_dependency)) -> dict:
     session = _session_or_404(session_id)
     return session_public(session, _document_or_404(session.document_id))
 
 
 @app.post("/api/sessions/{session_id}/messages")
-async def post_message(session_id: str, body: AnswerIn) -> dict:
+async def post_message(session_id: str, body: AnswerIn, _: None = Depends(_access_dependency)) -> dict:
     session = _session_or_404(session_id)
     if session.mode != "text":
         raise HTTPException(409, "Phiên này dùng chế độ giọng nói")
@@ -199,13 +233,13 @@ async def post_message(session_id: str, body: AnswerIn) -> dict:
 
 
 @app.get("/api/sessions/{session_id}/insights")
-def get_insights(session_id: str) -> dict:
+def get_insights(session_id: str, _: None = Depends(_access_dependency)) -> dict:
     session = _session_or_404(session_id)
     return engine.insights(session, _document_or_404(session.document_id))
 
 
 @app.post("/api/sessions/{session_id}/finish")
-async def finish_session(session_id: str) -> Report:
+async def finish_session(session_id: str, _: None = Depends(_access_dependency)) -> Report:
     session = _session_or_404(session_id)
     if session.report is not None:
         return session.report
@@ -213,7 +247,7 @@ async def finish_session(session_id: str) -> Report:
 
 
 @app.get("/api/sessions/{session_id}/report")
-def get_report(session_id: str) -> Report:
+def get_report(session_id: str, _: None = Depends(_access_dependency)) -> Report:
     session = _session_or_404(session_id)
     if session.report is None:
         raise HTTPException(404, "Phiên này chưa có báo cáo")
@@ -222,6 +256,12 @@ def get_report(session_id: str) -> Report:
 
 @app.websocket("/api/sessions/{session_id}/voice")
 async def voice_socket(websocket: WebSocket, session_id: str) -> None:
+    if settings.app_access_token:
+        authorization = websocket.headers.get("authorization", "")
+        supplied = authorization.removeprefix("Bearer ").strip() or websocket.cookies.get("app_access_token", "")
+        if not secrets.compare_digest(supplied, settings.app_access_token):
+            await websocket.close(code=4401)
+            return
     session = store.get_session(session_id)
     doc = store.get_document(session.document_id) if session else None
     if session is None or doc is None or session.mode != "voice":

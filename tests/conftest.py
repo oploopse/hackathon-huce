@@ -38,6 +38,7 @@ def client(tmp_path, monkeypatch):
     store = JsonStore(tmp_path)
     monkeypatch.setattr(main, "store", store)
     monkeypatch.setattr(main.engine, "store", store)
+    monkeypatch.setattr(main.settings, "app_access_token", "")
     for module in (knowledge_module, evaluator_module, report_module):
         monkeypatch.setattr(module, "generate_json", fake_generate_json)
     monkeypatch.setattr(interviewer_module, "generate_text", fake_generate_text)
