@@ -170,7 +170,7 @@ class VoiceBridge:
             output_audio_transcription=types.AudioTranscriptionConfig(),
             realtime_input_config=types.RealtimeInputConfig(
                 automatic_activity_detection=types.AutomaticActivityDetection(
-                    start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_LOW,
+                    start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,
                     end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW,
                     prefix_padding_ms=settings.vad_prefix_padding_ms,
                     silence_duration_ms=settings.vad_silence_ms,
@@ -341,7 +341,7 @@ class VoiceBridge:
                     evaluation = directive = None
                 if directive:
                     concept = self.doc.concept(directive.concept_id) if directive.concept_id else None
-                    note = render_voice_note(directive, concept, evaluation)
+                    note = render_voice_note(directive, concept, evaluation, self.doc)
             if interviewer_text:
                 self.engine.record_turn(self.session, "interviewer", interviewer_text)
             self.engine.store.save_session(self.session)

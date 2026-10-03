@@ -27,6 +27,8 @@ Mở `.env`, điền `GEMINI_API_KEY` (lấy miễn phí tại [Google AI Studio
 
 Lệnh này đọc `.env`, tắt server cũ của chính dự án nếu cổng 8000 đang bị bản đó chiếm, rồi mở http://127.0.0.1:8000. Trình duyệt chỉ cho dùng micro trên `localhost` hoặc HTTPS. Nếu model đang chọn báo quá tải (`503`), ứng dụng tự chuyển sang model dự phòng.
 
+Giao diện mới nằm ở `/` (`web/index.html`, mã trong `web/js/`); giao diện cũ vẫn mở được ở `/legacy.html`. Hợp đồng API giữa giao diện và backend được mô tả trong `web/API_CONTRACT.md`.
+
 Chạy test (không cần API key, dùng LLM và phiên Gemini Live giả):
 
 ```powershell
@@ -53,7 +55,7 @@ flowchart TB
     DIR --> REPORT["Báo cáo"]
 ```
 
-1. **Chuẩn bị** (`app/ingest.py`, `app/knowledge.py`): tài liệu được chuẩn hóa Unicode, chia đoạn có số trang, rồi model não (`gemini-3.7-flash` mặc định) sinh bản đồ kiến thức. Làm trước bước này giúp lúc phỏng vấn không phải chờ, và evaluator có "đáp án chuẩn" để chấm nhất quán.
+1. **Chuẩn bị** (`app/ingest.py`, `app/knowledge.py`): tài liệu được chuẩn hóa Unicode, chia đoạn có số trang, rồi `gemini-3.8-flash` sinh bản đồ kiến thức. Làm trước bước này giúp lúc phỏng vấn không phải chờ, và evaluator có "đáp án chuẩn" để chấm nhất quán.
 2. **Hội thoại** (`app/voice.py`): trình duyệt gửi audio 16 kHz, nhận audio 24 kHz. Voice agent tự hỏi follow-up ngay theo "thẻ chủ đề" bí mật, nên không phải chờ bộ não.
 3. **Bộ não** (`app/interview/`): sau mỗi lượt, evaluator chấm độ đúng, độ đủ ý, lập luận, mức Bloom, dấu hiệu học thuộc và hiểu lầm. Director (code thuần, không gọi LLM) quyết định bước tiếp theo, rồi gửi chỉ thị ẩn `[CHỈ THỊ ẨN]` vào phiên Gemini Live cho lượt nói kế tiếp.
 4. **Báo cáo** (`app/interview/report.py`): điểm số tính bằng code từ mức hiểu từng chủ đề (có trọng số theo độ quan trọng); LLM chỉ viết phần nhận xét.
@@ -78,16 +80,21 @@ Ngưỡng và trọng số nằm ở đầu `app/interview/director.py`.
 | Biến | Mặc định | Ý nghĩa |
 | --- | --- | --- |
 | `GEMINI_API_KEY` | | Key Gemini API |
-| `BRAIN_MODEL` | `gemini-3.7-flash` | Soạn bản đồ kiến thức, chấm điểm, viết báo cáo |
+| `APP_ACCESS_TOKEN` | | Token truy cập ứng dụng. Hãy đặt chuỗi ngẫu nhiên dài trước khi triển khai hoặc chia sẻ ứng dụng |
+| `BRAIN_MODEL` | `gemini-3.8-flash` | Soạn bản đồ kiến thức, chấm điểm, viết báo cáo |
 | `FAST_MODEL` | `gemini-3.5-flash-lite` | Lời người phỏng vấn ở chế độ nhắn tin |
 | `LIVE_MODEL` | `gemini-3.8-live` | Hội thoại giọng nói |
 | `LIVE_VOICE` | `Kore` | Giọng đọc của AI |
-| `VAD_SILENCE_MS` | `1000` | Im lặng bao lâu thì AI được nói |
-| `VAD_PREFIX_PADDING_MS` | `300` | Phải nói bao lâu mới tính là bắt đầu nói (lọc "dạ", "ừ") |
+| `VAD_SILENCE_MS` | `1500` | Im lặng bao lâu thì AI được nói; chờ lâu hơn để người học ngập ngừng |
+| `VAD_PREFIX_PADDING_MS` | `100` | Thời gian xác nhận bắt đầu nói; giảm để nhận câu trả lời ngắn |
 | `INTERVIEW_MINUTES` | `15` | Thời lượng tối đa một buổi |
 | `MAX_CONCEPTS_PER_SESSION` | `6` | Số chủ đề tối đa mỗi buổi |
 | `MAX_ANSWERS_PER_CONCEPT` | `4` | Số câu trả lời tối đa cho một chủ đề |
 | `MAX_HINTS_PER_CONCEPT` | `1` | Số lần gợi ý tối đa cho một chủ đề |
+
+Khi `APP_ACCESS_TOKEN` được cấu hình, API và WebSocket yêu cầu đăng nhập bằng token này.
+Giao diện sẽ hỏi token lần đầu và lưu token trong cookie HttpOnly của phiên trình duyệt.
+Không commit file `.env`; chỉ commit `.env.example` với placeholder.
 
 ## Lưu ý về free tier
 
@@ -101,8 +108,9 @@ Ngưỡng và trọng số nằm ở đầu `app/interview/director.py`.
 | Hiện tượng | Cách xử lý |
 | --- | --- |
 | AI tự ngắt lời chính nó | Đeo tai nghe, hoặc bỏ chọn "Cho phép ngắt lời AI" |
-| AI cướp lời khi đang suy nghĩ | Tăng `VAD_SILENCE_MS` (ví dụ 1500) |
-| Nói "dạ", "ừ" làm AI dừng | Tăng `VAD_PREFIX_PADDING_MS` (ví dụ 500) |
+| AI cướp lời khi đang suy nghĩ | Tăng `VAD_SILENCE_MS` (ví dụ 2000), đổi lại phản hồi chậm hơn |
+| Tạp âm làm AI dừng | Thử tăng `VAD_PREFIX_PADDING_MS` (ví dụ 200); tăng quá cao có thể bỏ sót câu ngắn |
+| AI hiểu thuật ngữ đơn lẻ thành yêu cầu giải thích | Live được nhắc xử lý theo câu hỏi gần nhất và đối chiếu trích đoạn nguồn khi mở phiên/chuyển chủ đề |
 | PDF tải lên báo không có chữ | PDF scan từ ảnh, cần chạy OCR trước |
 
 ## Cấu trúc

@@ -1,4 +1,4 @@
-// Adapter tới backend Python sẵn có (app/main.py), không cần sửa backend.
+// Adapter tới backend Python sẵn có (app/main.py).
 // Khi backend làm xong POST /api/interviews theo web/API_CONTRACT.md, chỉ cần đổi file này.
 
 export class ApiError extends Error {
@@ -20,7 +20,34 @@ function errorMessage(status, data) {
   return `Máy chủ báo lỗi (HTTP ${status}).`;
 }
 
-async function request(path, { method = "GET", json, form, timeoutMs = 120_000 } = {}) {
+let pendingLogin = null;
+
+// Backend bật APP_ACCESS_TOKEN thì mọi API trả 401 cho tới khi đăng nhập; cookie HttpOnly do /api/auth/login đặt
+// được gửi kèm cả các request sau và WebSocket. Nhiều request cùng gặp 401 chỉ hỏi token một lần.
+function login() {
+  if (!pendingLogin) {
+    pendingLogin = (async () => {
+      const token = window.prompt("Nhập APP_ACCESS_TOKEN để đăng nhập:");
+      if (!token) return false;
+      try {
+        const response = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ token: token.trim() }),
+        });
+        return response.ok;
+      } catch {
+        return false;
+      }
+    })().finally(() => {
+      pendingLogin = null;
+    });
+  }
+  return pendingLogin;
+}
+
+async function request(path, options = {}, retryAuth = true) {
+  const { method = "GET", json, form, timeoutMs = 120_000 } = options;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -37,6 +64,10 @@ async function request(path, { method = "GET", json, form, timeoutMs = 120_000 }
         error.name === "AbortError" ? "Giám khảo AI phản hồi quá lâu." : "Không kết nối được máy chủ.",
         error.name === "AbortError" ? 408 : 0,
       );
+    }
+    if (response.status === 401 && retryAuth) {
+      clearTimeout(timer);
+      if (await login()) return request(path, options, false);
     }
     let data = null;
     try {

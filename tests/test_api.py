@@ -16,7 +16,28 @@ def test_health_reports_models():
 def test_index_page_is_served():
     response = client.get("/")
     assert response.status_code == 200
-    assert "AI Interviewer" in response.text
+    assert "Socratic Exam" in response.text
+    assert '<script type="module" src="/js/main.js">' in response.text
+
+    legacy = client.get("/legacy.html")
+    assert legacy.status_code == 200
+    assert "AI Interviewer" in legacy.text
+
+
+def test_access_token_guards_api_until_login(client, monkeypatch):
+    monkeypatch.setattr("app.main.settings.app_access_token", "secret-token")
+
+    assert client.get("/api/documents").status_code == 401
+    assert client.get("/api/health").status_code == 200
+    assert client.post("/api/auth/login", json={"token": "wrong"}).status_code == 401
+
+    login = client.post("/api/auth/login", json={"token": "secret-token"})
+    assert login.status_code == 200
+    assert "httponly" in login.headers["set-cookie"].lower()
+    assert client.get("/api/documents").status_code == 200
+
+    client.cookies.clear()
+    assert client.get("/api/documents", headers={"Authorization": "Bearer secret-token"}).status_code == 200
 
 
 def test_upload_rejects_unsupported_file():
