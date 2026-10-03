@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Interviewer</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span>AI Interviewer</span></div>
+    <div id="health" class="pill">Đang kiểm tra…</div>
+  </header>
+
+  <main class="container">
+    <section id="view-setup" class="view">
+      <div class="intro">
+        <h1>Phỏng vấn để biết người học có thực sự hiểu bài</h1>
+        <p>Tải tài liệu lên, AI sẽ soạn câu hỏi, trò chuyện với người học, hỏi sâu khi cần và đánh giá ngầm trong suốt buổi.</p>
+      </div>
+
+      <div class="setup-grid">
+        <div class="card">
+          <div class="card-head"><span class="step">1</span><h2>Tài liệu</h2></div>
+          <label id="dropzone" class="dropzone">
+            <input id="file-input" type="file" accept=".pdf,.docx,.txt,.md" hidden>
+            <strong>Kéo thả file vào đây</strong>
+            <span>hoặc bấm để chọn · PDF, DOCX, TXT, MD</span>
+          </label>
+          <div id="upload-status" class="upload-status" hidden></div>
+          <div id="doc-list-head" class="list-head" hidden>Tài liệu đã tải</div>
+          <ul id="doc-list" class="doc-list"></ul>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><span class="step">2</span><h2>Bắt đầu phỏng vấn</h2></div>
+          <p id="doc-empty" class="empty">Chọn hoặc tải một tài liệu để xem các chủ đề sẽ được hỏi.</p>
+          <div id="doc-detail" hidden>
+            <h3 id="doc-title" class="doc-title"></h3>
+            <p id="doc-summary" class="muted"></p>
+            <p id="doc-truncated" class="notice" hidden>Tài liệu dài nên chỉ phần đầu được dùng để soạn câu hỏi.</p>
+            <div class="list-head">Các chủ đề sẽ hỏi</div>
+            <ul id="concept-list" class="concept-list"></ul>
+
+            <form id="start-form" class="start-form">
+              <label class="field">
+                <span>Tên người học</span>
+                <input id="learner-name" maxlength="60" placeholder="Ví dụ: Lan" autocomplete="off">
+              </label>
+              <div class="field">
+                <span>Hình thức</span>
+                <div class="segmented" role="radiogroup" aria-label="Hình thức phỏng vấn">
+                  <button type="button" class="seg active" data-mode="voice" role="radio" aria-checked="true">Giọng nói</button>
+                  <button type="button" class="seg" data-mode="text" role="radio" aria-checked="false">Nhắn tin</button>
+                </div>
+              </div>
+              <label class="check" id="barge-in-row">
+                <input type="checkbox" id="barge-in" checked>
+                <span>Cho phép ngắt lời AI. Nên đeo tai nghe, nếu không AI có thể nghe thấy chính giọng của nó.</span>
+              </label>
+              <button type="submit" class="btn primary wide" id="start-btn">Bắt đầu phỏng vấn</button>
+            </form>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-interview" class="view" hidden>
+      <div class="interview-grid" id="interview-grid">
+        <div class="card stage">
+          <div class="stage-head">
+            <div>
+              <div class="stage-title" id="stage-title"></div>
+              <div class="muted small"><span id="timer">00:00</span> / <span id="time-limit">15:00</span></div>
+            </div>
+            <div class="stage-actions">
+              <button class="btn ghost" id="toggle-teacher" type="button" aria-pressed="false">Bảng giáo viên</button>
+              <button class="btn danger" id="end-btn" type="button">Kết thúc</button>
+            </div>
+          </div>
+
+          <div id="voice-stage" class="voice-stage" hidden>
+            <div class="orb" id="orb" data-state="connecting" aria-hidden="true">
+              <span class="orb-ring"></span>
+              <span class="orb-core"></span>
+            </div>
+            <div class="orb-label" id="orb-label">Đang kết nối…</div>
+            <div class="voice-controls">
+              <button class="btn ghost" id="mute-btn" type="button" aria-pressed="false">Tắt mic</button>
+              <label class="check small"><input type="checkbox" id="show-captions" checked><span>Hiện phụ đề</span></label>
+            </div>
+          </div>
+
+          <div id="chat" class="chat" aria-live="polite"></div>
+
+          <div id="finished-banner" class="finished" hidden>
+            <span>Buổi phỏng vấn đã kết thúc.</span>
+            <button class="btn primary" id="report-btn" type="button">Xem báo cáo</button>
+          </div>
+
+          <form id="chat-form" class="composer" hidden>
+            <textarea id="chat-input" rows="2" placeholder="Nhập câu trả lời… (Enter để gửi, Shift+Enter để xuống dòng)"></textarea>
+            <button class="btn primary" type="submit" id="send-btn">Gửi</button>
+          </form>
+        </div>
+
+        <aside class="card teacher" id="teacher-panel" hidden>
+          <div class="teacher-head"><h3>Đánh giá ngầm</h3><span class="tag">Chỉ giáo viên</span></div>
+          <div id="progress-list" class="progress-list"></div>
+          <h4>Lượt chấm gần nhất</h4>
+          <div id="eval-list" class="eval-list"></div>
+        </aside>
+      </div>
+    </section>
+
+    <section id="view-report" class="view" hidden>
+      <div id="report-loading" class="card loading-card" hidden>
+        <div class="spinner"></div>
+        <p id="report-loading-text">Đang tổng hợp báo cáo…</p>
+        <button class="btn ghost" id="report-retry" type="button" hidden>Thử lại</button>
+      </div>
+
+      <div id="report" hidden>
+        <div class="card report-hero">
+          <div class="score-ring" id="score-ring">
+            <span id="score-value">0</span><small>/100</small>
+          </div>
+          <div class="hero-text">
+            <span class="level-badge" id="overall-level"></span>
+            <h2 id="report-title"></h2>
+            <p class="muted" id="report-meta"></p>
+          </div>
+        </div>
+        <div class="tabs" role="tablist">
+          <button class="tab active" data-tab="learner" role="tab" aria-selected="true">Cho người học</button>
+          <button class="tab" data-tab="teacher" role="tab" aria-selected="false">Cho giáo viên</button>
+        </div>
+        <div id="tab-learner" class="tab-panel" role="tabpanel"></div>
+        <div id="tab-teacher" class="tab-panel" role="tabpanel" hidden></div>
+        <div class="report-actions"><button class="btn ghost" id="restart-btn" type="button">Phỏng vấn buổi mới</button></div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
